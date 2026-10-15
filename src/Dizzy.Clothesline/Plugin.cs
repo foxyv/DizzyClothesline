@@ -1,0 +1,65 @@
+using BepInEx;
+using BepInEx.Logging;
+using HarmonyLib;
+
+namespace Dizzy.Clothesline
+{
+    [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+    [BepInDependency(CoopLink.CoopGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInProcess("Sailwind.exe")]
+    public class Plugin : BaseUnityPlugin
+    {
+        public const string PluginGuid = "com.dizzy.sailwind.clothesline";
+        public const string PluginName = "Dizzy Clothesline";
+        public const string PluginVersion = "0.1.0";
+
+        internal static ManualLogSource Log;
+        internal static Plugin Instance;
+
+        private Harmony _harmony;
+        private bool _tickFailed;
+
+        private void Awake()
+        {
+            Instance = this;
+            Log = Logger;
+            ClotheslineConfig.Bind(Config);
+
+            _harmony = new Harmony(PluginGuid);
+            try
+            {
+                _harmony.PatchAll(typeof(Plugin).Assembly);
+                CoopLink.Apply(_harmony);
+            }
+            catch (System.Exception ex)
+            {
+                Log.LogError(PluginName + " failed to patch Sailwind: " + ex);
+            }
+
+            Log.LogInfo(PluginName + " v" + PluginVersion + " loaded (Tie Key=" + ClotheslineConfig.TieKey.Value
+                + ", Max Length=" + ClotheslineConfig.MaxLength.Value + ").");
+        }
+
+        private void Update()
+        {
+            try
+            {
+                Lines.Tick();
+            }
+            catch (System.Exception ex)
+            {
+                // Log once, not every frame.
+                if (!_tickFailed)
+                    Log.LogError("Clothesline update failed: " + ex);
+                _tickFailed = true;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            _harmony?.UnpatchSelf();
+            if (Instance == this)
+                Instance = null;
+        }
+    }
+}

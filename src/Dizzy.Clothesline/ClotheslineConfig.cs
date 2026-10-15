@@ -17,7 +17,7 @@ namespace Dizzy.Clothesline
         {
             TieKey = config.Bind("Controls", "Tie Key", KeyCode.L,
                 "Look at a lamp hook and press this to start a line, then look at a second hook and press it again to tie the line. "
-                + "Press it while looking at a line to untie it.");
+                + "Press it while looking at a line to untie it, or, if the line has items on it, to space them out evenly (one item is centered).");
 
             MaxLength = config.Bind("Line", "Max Length", 6f, new ConfigDescription(
                 "Longest line you can tie between two hooks, in metres.",

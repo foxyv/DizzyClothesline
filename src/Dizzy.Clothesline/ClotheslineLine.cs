@@ -342,7 +342,7 @@ namespace Dizzy.Clothesline
             }
 
             unclickable = Lines.HeldBlocksLines;
-            lookText = Lines.LineLookText;
+            lookText = Lines.LookTextFor(Record);
         }
 
         private static bool Moved(Transform hook, Vector3 position, Quaternion rotation)

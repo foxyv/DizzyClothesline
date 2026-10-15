@@ -16,8 +16,11 @@ A [Sailwind](https://store.steampowered.com/app/1764530/Sailwind/) mod for [BepI
 - Items keep a little space between them. Click where there is room.
 - Click a hanging item to take it down.
 
+### Space out
+- Look at a line with things on it and press **L**. They spread out evenly along the line in their present order. One item is centered.
+
 ### Untie
-- Look at the line and press **L**. Anything on it falls.
+- Look at an empty line and press **L**. A line with things on it spaces them out instead, so take them down first.
 - Picking up either hook also unties its lines.
 
 Lines and what hangs on them are saved with your game.
@@ -33,7 +36,7 @@ Lines and what hangs on them are saved with your game.
 
 | Setting | Default | |
 |---|---|---|
-| Controls / Tie Key | L | Start, tie, cancel and untie lines. |
+| Controls / Tie Key | L | Start, tie, cancel and untie lines, and space out the items on a line. |
 | Line / Max Length | 6 | Longest line, in metres. |
 | Line / Sag | 0.04 | How far the middle hangs, as a share of the length. |
 | Line / Thickness | 0.02 | Rope thickness, in metres. |

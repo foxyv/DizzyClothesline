@@ -39,6 +39,7 @@ namespace Dizzy.Clothesline
             Hang = 3,
             Unhang = 4,
             State = 5,
+            Spread = 6,
         }
 
         private sealed class Message
@@ -296,6 +297,11 @@ namespace Dizzy.Clothesline
             Send(new Message { Kind = Kind.Hang, HookA = line.HookA, HookB = line.HookB, Item = item.ItemId, S = item.S, Side = item.Side });
         }
 
+        internal static void SendSpread(LineRecord line)
+        {
+            Send(new Message { Kind = Kind.Spread, HookA = line.HookA, HookB = line.HookB });
+        }
+
         internal static void SendUnhang(int itemId)
         {
             Send(new Message { Kind = Kind.Unhang, Item = itemId });
@@ -373,6 +379,7 @@ namespace Dizzy.Clothesline
                 {
                     case Kind.Tie:
                     case Kind.Untie:
+                    case Kind.Spread:
                         writer.Write(message.HookA);
                         writer.Write(message.HookB);
                         break;
@@ -456,6 +463,7 @@ namespace Dizzy.Clothesline
             {
                 case Kind.Tie:
                 case Kind.Untie:
+                case Kind.Spread:
                     message.HookA = reader.ReadInt32();
                     message.HookB = reader.ReadInt32();
                     return message;
@@ -511,6 +519,9 @@ namespace Dizzy.Clothesline
                         break;
                     case Kind.Untie:
                         Lines.RemoteUntie(message.HookA, message.HookB);
+                        break;
+                    case Kind.Spread:
+                        Lines.RemoteSpread(message.HookA, message.HookB);
                         break;
                     case Kind.Hang:
                         Lines.RemoteHang(message.HookA, message.HookB, message.Item, message.S, message.Side);

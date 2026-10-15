@@ -40,9 +40,6 @@ namespace Dizzy.Clothesline
         private static float _nextPointerSearch;
 
         internal static bool HeldBlocksLines;
-        internal static string LineLookText = "";
-        private static string _untieText;
-        private static KeyCode _untieTextKey;
 
         private static bool _dirty;
         private static float _retryAt;
@@ -152,13 +149,21 @@ namespace Dizzy.Clothesline
             bool canHang = CanHang(held);
             HeldBlocksLines = held != null && !canHang;
 
-            KeyCode key = ClotheslineConfig.TieKey.Value;
-            if (_untieText == null || key != _untieTextKey)
-            {
-                _untieTextKey = key;
-                _untieText = "clothesline\n" + ClotheslineConfig.TieKeyLabel + ": untie";
-            }
-            LineLookText = canHang ? "hang here" : _untieText;
+            _canHang = canHang;
+        }
+
+        private static bool _canHang;
+
+        // The key does two things: it spaces out a line with items on it, and unties
+        // an empty one, so a loaded line can't be untied by accident.
+        internal static string LookTextFor(LineRecord record)
+        {
+            if (_canHang)
+                return "hang here";
+            string key = ClotheslineConfig.TieKeyLabel;
+            return record != null && record.Items.Count > 0
+                ? "clothesline\n" + key + ": space out"
+                : "clothesline\n" + key + ": untie";
         }
 
         private static bool CanHang(PickupableItem item)
@@ -189,6 +194,11 @@ namespace Dizzy.Clothesline
 
             if (line != null)
             {
+                if (line.Record.Items.Count > 0)
+                {
+                    Spread(line.Record, true);
+                    return;
+                }
                 Untie(line.Record, "Line untied.", true);
                 return;
             }
@@ -428,6 +438,31 @@ namespace Dizzy.Clothesline
             {
                 PlayKnotSound();
                 Notify(message);
+            }
+        }
+
+        // Spaces the items on a line evenly, in their present order, with equal gaps
+        // at both ends. One item ends up in the middle.
+        internal static void Spread(LineRecord record, bool broadcast)
+        {
+            if (record == null || record.Items.Count == 0)
+            {
+                if (broadcast)
+                    Notify("Nothing hangs on this line.");
+                return;
+            }
+
+            List<HungRecord> items = record.Items;
+            items.Sort((a, b) => a.S.CompareTo(b.S));
+            for (int i = 0; i < items.Count; i++)
+                items[i].S = (i + 0.5f) / items.Count;
+
+            if (record.Live != null)
+                record.Live.Rebuild();
+            if (broadcast)
+            {
+                CoopLink.SendSpread(record);
+                PlayKnotSound();
             }
         }
 
@@ -955,6 +990,11 @@ namespace Dizzy.Clothesline
                 return;
             LineStore.Add(new LineRecord { HookA = hookA, HookB = hookB });
             MarkDirty();
+        }
+
+        internal static void RemoteSpread(int hookA, int hookB)
+        {
+            Spread(LineStore.Find(hookA, hookB), false);
         }
 
         internal static void RemoteUntie(int hookA, int hookB)

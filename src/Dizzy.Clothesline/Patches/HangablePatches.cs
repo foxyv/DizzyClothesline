@@ -31,6 +31,60 @@ namespace Dizzy.Clothesline.Patches
         }
     }
 
+    // Runs after the game, and after other mods, have set the hung rotation.
+    // A spyglass on a line is turned to point down. A hanging windicator is turned
+    // a quarter turn so its ring faces the cord. A pot on a line is set level.
+    // A Medi lantern is turned a quarter turn so its bail opens along the rope.
+    // A wind chime keeps its hang pitch and is turned so its loop opens along the rope.
+    // A wood mug is turned a quarter turn about its handle. Both metal mugs are only raised.
+    // Everything else is left alone.
+    [HarmonyPatch(typeof(HangableItem), "LateUpdate")]
+    internal static class SpyglassPosePatch
+    {
+        [HarmonyPriority(Priority.Last)]
+        private static void Postfix(HangableItem __instance)
+        {
+            Lines.PoseSpyglass(__instance);
+            Lines.PoseWindicator(__instance);
+            Lines.PoseHammer(__instance);
+            Lines.PosePot(__instance);
+            Lines.PoseLantern(__instance);
+            Lines.PoseWindChime(__instance);
+            Lines.PoseMug(__instance);
+        }
+    }
+
+    // HooksHangMore refuses a bottle poured into any hanging pot. A pot on a line
+    // is reported as not hanging for that one click, so the game's own pour runs.
+    // A pot on a lamp hook still gets the refusal.
+    [HarmonyPatch(typeof(ShipItemSoup), nameof(ShipItemSoup.OnItemClick))]
+    internal static class LinePotFillPatch
+    {
+        [HarmonyPriority(Priority.First)]
+        private static void Prefix(ShipItemSoup __instance, PickupableItem heldItem)
+        {
+            Lines.PrepareLineFill(__instance, heldItem);
+        }
+
+        private static void Postfix()
+        {
+            Lines.EndLineFill();
+        }
+    }
+
+    [HarmonyPatch(typeof(HangableItem), nameof(HangableItem.IsHanging))]
+    // modcheck-ignore: SW801 skips the original only for one click, a water bottle poured into a pot on a line
+    internal static class LinePotHangingPatch
+    {
+        private static bool Prefix(HangableItem __instance, ref bool __result)
+        {
+            if (!Lines.HideLinePotFromFillBlock(__instance))
+                return true;
+            __result = false;
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(HangableItem), nameof(HangableItem.OnTriggerEnter))]
     internal static class HangOnTriggerPatch
     {

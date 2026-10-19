@@ -15,5 +15,13 @@ namespace Dizzy.Clothesline
         internal HangableItem Item;
         internal ShipItem Ship;
         internal int HangId;
+        internal StemTie Tie;
+        internal SpyglassTie Lash;
+        internal RackHook Rack;
+        internal LoopTie Loop;
+        internal HammerTie Hammer;
+        internal PotTie Pot;
+        internal SausageKnot Sausage;
+        internal BagKnot Bag;
     }
 }

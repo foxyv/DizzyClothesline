@@ -6,12 +6,13 @@ namespace Dizzy.Clothesline
 {
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     [BepInDependency(CoopLink.CoopGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency("com.raddude.hookshangmore", BepInDependency.DependencyFlags.SoftDependency)]
     [BepInProcess("Sailwind.exe")]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "com.dizzy.sailwind.clothesline";
         public const string PluginName = "Dizzy Clothesline";
-        public const string PluginVersion = "0.2.0";
+        public const string PluginVersion = "0.3.0";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;

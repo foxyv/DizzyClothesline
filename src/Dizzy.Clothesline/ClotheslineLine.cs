@@ -14,7 +14,8 @@ namespace Dizzy.Clothesline
         private const int MeshSegments = 24;
         private const int ColliderSegments = 12;
         private const float ColliderRadius = 0.03f;
-        // Items stay this far from the hooks, clear of the hooks' own colliders.
+        // Items stay at least this far from the hooks, clear of the hooks' own colliders.
+        // A knot longer than this pushes them out past the knot as well.
         private const float EndGap = 0.15f;
         private const float MoveTolerance = 0.001f;
 
@@ -24,7 +25,9 @@ namespace Dizzy.Clothesline
 
         private readonly List<LineAnchor> _anchors = new List<LineAnchor>();
         private readonly List<CapsuleCollider> _segments = new List<CapsuleCollider>();
+        private readonly List<Vector3[]> _paths = new List<Vector3[]>(5);
         private readonly Vector3[] _points = new Vector3[MeshSegments + 1];
+        private float _knotReach;
 
         private Mesh _mesh;
         private MeshRenderer _renderer;
@@ -96,7 +99,7 @@ namespace Dizzy.Clothesline
 
             for (int i = 0; i <= MeshSegments; i++)
                 _points[i] = Point((float)i / MeshSegments);
-            RopeMesh.Build(_mesh, _points, ClotheslineConfig.Thickness.Value * 0.5f);
+            BuildMesh();
             RebuildColliders();
 
             for (int i = 0; i < _anchors.Count; i++)
@@ -109,6 +112,99 @@ namespace Dizzy.Clothesline
             return parent != null ? parent.InverseTransformPoint(world) : world;
         }
 
+        // Hook up, in this object's space. Rebuild has already cleared our rotation,
+        // so this is the direction the eye should open.
+        private Vector3 HookUp(ShipItem hook)
+        {
+            return transform.InverseTransformDirection(hook.transform.up);
+        }
+
+        // Standing rope between the two knots, plus an eye and three turns at each hook.
+        // On a line too short for that, the rope is left plain.
+        private void BuildMesh()
+        {
+            float diameter = ClotheslineConfig.Thickness.Value;
+            float scale = RopeKnot.Scale(diameter, ArcLength());
+            _paths.Clear();
+
+            if (scale <= 0f)
+            {
+                _knotReach = 0f;
+                _paths.Add(_points);
+            }
+            else
+            {
+                _knotReach = RopeKnot.Reach(diameter, scale);
+                float trim = RopeKnot.Trim(diameter, scale);
+                float fromA;
+                float fromB;
+                Vector3 joinA = PointAlong(trim, false, out fromA);
+                Vector3 joinB = PointAlong(trim, true, out fromB);
+                if (fromB - fromA < 0.02f)
+                {
+                    _knotReach = 0f;
+                    _paths.Add(_points);
+                }
+                else
+                {
+                    var rope = new Vector3[MeshSegments + 1];
+                    for (int i = 0; i <= MeshSegments; i++)
+                        rope[i] = Point(Mathf.Lerp(fromA, fromB, i / (float)MeshSegments));
+                    rope[0] = joinA;
+                    rope[MeshSegments] = joinB;
+                    _paths.Add(rope);
+                    RopeKnot.Add(_paths, Point(0f), joinA, HookUp(HookA), diameter, scale);
+                    RopeKnot.Add(_paths, Point(1f), joinB, HookUp(HookB), diameter, scale);
+                }
+            }
+
+            RopeMesh.Build(_mesh, _paths, diameter * 0.5f);
+        }
+
+        private float ArcLength()
+        {
+            int steps = MeshSegments * 4;
+            float length = 0f;
+            Vector3 prev = Point(0f);
+            for (int i = 1; i <= steps; i++)
+            {
+                Vector3 next = Point(i / (float)steps);
+                length += Vector3.Distance(prev, next);
+                prev = next;
+            }
+
+            return length;
+        }
+
+        // A point `distance` metres from one hook, following the sag. fromEnd walks
+        // back from HookB. s is the 0-at-HookA parameter of that point.
+        private Vector3 PointAlong(float distance, bool fromEnd, out float s)
+        {
+            int steps = MeshSegments * 4;
+            float walked = 0f;
+            float sPrev = fromEnd ? 1f : 0f;
+            Vector3 prev = Point(sPrev);
+            for (int i = 1; i <= steps; i++)
+            {
+                float sNext = fromEnd ? 1f - (float)i / steps : (float)i / steps;
+                Vector3 next = Point(sNext);
+                float step = Vector3.Distance(prev, next);
+                if (step > 1e-6f && walked + step >= distance)
+                {
+                    float u = (distance - walked) / step;
+                    s = Mathf.Lerp(sPrev, sNext, u);
+                    return Vector3.Lerp(prev, next, u);
+                }
+
+                walked += step;
+                prev = next;
+                sPrev = sNext;
+            }
+
+            s = fromEnd ? 0f : 1f;
+            return Point(s);
+        }
+
         // Point on the rope, in this object's space. Sags along the boat's down, so it
         // heels with the boat like the hooks do.
         private Vector3 Point(float s)
@@ -116,6 +212,21 @@ namespace Dizzy.Clothesline
             Vector3 p = Vector3.Lerp(_a, _b, s);
             p.y -= _span * ClotheslineConfig.Sag.Value * 4f * s * (1f - s);
             return p;
+        }
+
+        internal Vector3 RopeWorld(float s)
+        {
+            return transform.TransformPoint(Point(Mathf.Clamp01(s)));
+        }
+
+        internal Vector3 RopeDirectionWorld(float s)
+        {
+            float a = Mathf.Clamp01(s - 0.01f);
+            float b = Mathf.Clamp01(s + 0.01f);
+            Vector3 along = Point(b) - Point(a);
+            if (along.sqrMagnitude < 1e-10f)
+                along = Vector3.right;
+            return transform.TransformDirection(along.normalized);
         }
 
         // Level direction across the rope at s.
@@ -187,12 +298,18 @@ namespace Dizzy.Clothesline
             return _anchors.ToArray();
         }
 
-        private void Place(LineAnchor anchor)
+        internal void Place(LineAnchor anchor)
         {
             float s = anchor.Record.S;
             Vector3 across = Across(s) * anchor.Record.Side;
             anchor.transform.localRotation = Quaternion.LookRotation(across, Vector3.up);
-            anchor.transform.localPosition = Point(s) + across * Lines.HookOffset - Vector3.up * ClotheslineConfig.HangDrop.Value;
+            // A spyglass is pinned by its origin, which sits near the objective. Drop
+            // it until the eyepiece, at the top, is the part under the rope.
+            float drop = SpyglassTie.Drop(anchor.Ship) + HammerTie.Drop(anchor.Ship) + PotTie.Drop(anchor.Ship)
+                + LanternHang.Drop(anchor.Ship) + WindChimeHang.Drop(anchor.Ship)
+                + MugHang.Drop(anchor.Ship);
+            anchor.transform.localPosition = Point(s) + across * Lines.HookOffset
+                - Vector3.up * (ClotheslineConfig.HangDrop.Value + drop);
         }
 
         // Nearest place on the rope to a world point, from 0 at HookA to 1 at HookB.
@@ -217,14 +334,14 @@ namespace Dizzy.Clothesline
         }
 
         // A free place at or near where the player clicked. Items keep the configured
-        // spacing from each other, and stay clear of the hooks.
+        // spacing from each other, and stay clear of the hooks and the knots on them.
         internal bool TryFindRoom(float wanted, out float s)
         {
             s = wanted;
             if (_span <= 0f)
                 return false;
 
-            float min = EndGap / _span;
+            float min = Mathf.Max(EndGap, _knotReach) / _span;
             float max = 1f - min;
             if (min > max)
                 return false;
@@ -339,6 +456,17 @@ namespace Dizzy.Clothesline
                     Lines.ItemVanished(anchor);
                 else if (Lines.IsHeldLocally(anchor.Ship))
                     anchor.Item.DisconnectJoint();
+                else
+                {
+                    StemTie.Sync(anchor);
+                    SpyglassTie.Sync(anchor);
+                    RackHook.Sync(anchor);
+                    LoopTie.Sync(anchor);
+                    HammerTie.Sync(anchor);
+                    PotTie.Sync(anchor);
+                    SausageKnot.Sync(anchor);
+                    BagKnot.Sync(anchor);
+                }
             }
 
             unclickable = Lines.HeldBlocksLines;

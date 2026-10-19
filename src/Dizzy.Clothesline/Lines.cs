@@ -172,6 +172,8 @@ namespace Dizzy.Clothesline
             if (ship == null || !ship.sold)
                 return false;
             HangableItem hang = ship.GetComponent<HangableItem>();
+            if (SpyglassTie.Is(ship) || HammerTie.Is(ship))
+                return hang == null || !hang.IsHanging();
             return hang != null && !hang.IsHanging();
         }
 
@@ -544,6 +546,15 @@ namespace Dizzy.Clothesline
         // line as a player hanging it would; a loaded item keeps its saved turn.
         private static bool HangNow(ClotheslineLine line, HungRecord record, HangableItem hang, ShipItem ship, bool face)
         {
+            if (ship == null)
+                return false;
+            if (SpyglassTie.Is(ship))
+                hang = SpyglassTie.Prepare(ship);
+            else if (HammerTie.Is(ship))
+                hang = HammerTie.Prepare(ship);
+            if (hang == null)
+                return false;
+
             LineAnchor anchor = line.CreateAnchor(record);
             PlaceOnAnchor(ship, anchor, face);
             hang.ConnectJoint(anchor.Col);
@@ -552,13 +563,20 @@ namespace Dizzy.Clothesline
 
             line.RemoveAnchor(anchor);
             Object.Destroy(anchor.gameObject);
+            SpyglassTie.Detach(ship);
+            HammerTie.Detach(ship);
             return false;
         }
 
         // Where HangableItem will pin the item, so the twin is put there too.
         private static void PlaceOnAnchor(ShipItem ship, LineAnchor anchor, bool face)
         {
-            if (face)
+            // Place uses the ship to drop a spyglass until its eyepiece is under the rope.
+            anchor.Ship = ship;
+            if (anchor.Line != null)
+                anchor.Line.Place(anchor);
+
+            if (face && !SpyglassTie.Is(ship) && !HammerTie.Is(ship))
             {
                 // Away from the player, the way an item on a wall hook ends up.
                 Vector3 facing = anchor.transform.forward;
@@ -644,6 +662,14 @@ namespace Dizzy.Clothesline
             anchor.HangId = hang.GetInstanceID();
             Hung[anchor.HangId] = anchor;
             Frozen.Remove(anchor.Record.ItemId);
+            StemTie.Sync(anchor);
+            SpyglassTie.Sync(anchor);
+            RackHook.Sync(anchor);
+            LoopTie.Sync(anchor);
+            HammerTie.Sync(anchor);
+            PotTie.Sync(anchor);
+            SausageKnot.Sync(anchor);
+            BagKnot.Sync(anchor);
         }
 
         // HangableItem.DisconnectJoint, for an item on a line.
@@ -665,6 +691,14 @@ namespace Dizzy.Clothesline
         // modcheck-ignore: SW603 an item put away with its boat (-2) or sunk (-3) keeps its record; only a real destroy removes it
         private static void Release(LineAnchor anchor, bool keepRecord)
         {
+            StemTie.Clear(anchor);
+            SpyglassTie.Clear(anchor);
+            RackHook.Clear(anchor);
+            LoopTie.Clear(anchor);
+            HammerTie.Clear(anchor);
+            PotTie.Clear(anchor);
+            SausageKnot.Clear(anchor);
+            BagKnot.Clear(anchor);
             Hung.Remove(anchor.HangId);
             if (anchor.Item != null)
                 CurrentHook(anchor.Item) = null;
@@ -700,6 +734,8 @@ namespace Dizzy.Clothesline
                         }
                     }
                     ship.ToggleDisallowDisembarking(false);
+                    SpyglassTie.Detach(ship);
+                    HammerTie.Detach(ship);
                 }
             }
 
@@ -893,17 +929,18 @@ namespace Dizzy.Clothesline
                         continue;
 
                     // Bundle mods may add HangableItem a little after the item loads.
+                    // A spyglass grows its own only while it hangs here.
+                    ShipItem ship = prefab.GetComponent<ShipItem>();
                     HangableItem hang = prefab.GetComponent<HangableItem>();
-                    if (hang == null)
+                    if (hang == null && !SpyglassTie.Is(ship) && !HammerTie.Is(ship))
                     {
                         waiting = true;
                         continue;
                     }
-                    if (Hung.ContainsKey(hang.GetInstanceID()))
+                    if (hang != null && Hung.ContainsKey(hang.GetInstanceID()))
                         continue;
 
-                    ShipItem ship = prefab.GetComponent<ShipItem>();
-                    if (ship == null || hang.IsHanging() || IsHeldLocally(ship) || ship.GetCurrentInventorySlot() != -1)
+                    if (ship == null || (hang != null && hang.IsHanging()) || IsHeldLocally(ship) || ship.GetCurrentInventorySlot() != -1)
                     {
                         // It ended up somewhere else.
                         Unfreeze(item.ItemId);
@@ -1027,7 +1064,7 @@ namespace Dizzy.Clothesline
 
             var record = new HungRecord { ItemId = itemId, S = s, Side = side };
             LineStore.AddItem(line, record);
-            if (line.Live != null && hang != null && HangNow(line.Live, record, hang, ship, true))
+            if (line.Live != null && ship != null && HangNow(line.Live, record, hang, ship, true))
                 return;
 
             Freeze(ship, itemId);
@@ -1046,6 +1083,212 @@ namespace Dizzy.Clothesline
             }
             LineStore.RemoveItem(itemId);
             Unfreeze(itemId);
+        }
+
+        // After HangableItem pins an item upright, point a spyglass on a line down
+        // so its objective, along local +Z, hangs below the eyepiece.
+        internal static void PoseSpyglass(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!SpyglassTie.Is(anchor.Ship))
+                return;
+
+            Transform hook = anchor.transform;
+            anchor.Ship.transform.position = hook.position - hook.forward * HookOffset;
+            Vector3 across = hook.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            anchor.Ship.transform.rotation = Quaternion.LookRotation(Vector3.down, across.normalized);
+        }
+
+        // After HangableItem pins an item upright, turn a hammer so its head, at
+        // the high end of local Z, is up and the handle hangs down. A quarter turn
+        // around that axis brings the wide face of the head out toward the line.
+        // The game pins the mesh origin, which is beside the shaft, so the shaft
+        // is shifted back onto the rope.
+        internal static void PoseHammer(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!HammerTie.Is(anchor.Ship))
+                return;
+
+            Transform hook = anchor.transform;
+            Vector3 across = hook.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            Quaternion rotation = Quaternion.AngleAxis(90f, Vector3.up)
+                * Quaternion.LookRotation(Vector3.up, across.normalized);
+            anchor.Ship.transform.rotation = rotation;
+            Vector3 shaft = rotation * HammerTie.ShaftShift;
+            shaft.y = 0f;
+            anchor.Ship.transform.position = hook.position - hook.forward * HookOffset - shaft;
+        }
+
+        // HooksHangMore hangs a pot tilted, with a handle toward the hook. On a line,
+        // sit it level under the rope, turned so the handles point out from the line.
+        // The cord is drawn by PotTie.
+        internal static void PosePot(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!PotTie.Is(anchor.Ship))
+                return;
+
+            Transform hook = anchor.transform;
+            Vector3 across = hook.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            anchor.Ship.transform.rotation = Quaternion.AngleAxis(90f, Vector3.up)
+                * Quaternion.LookRotation(across.normalized, Vector3.up);
+            anchor.Ship.transform.position = hook.position - hook.forward * HookOffset;
+
+            // Hanging turns the collider off, so a bottle cannot find the pot. Leave it
+            // on while the pot is on a line. A lamp hook keeps it off.
+            ItemRigidbody twin = anchor.Ship.GetItemRigidbody();
+            if (twin != null && twin.disableCol)
+            {
+                twin.disableCol = false;
+                twin.ToggleCollider(true);
+            }
+        }
+
+        // True while a water bottle is being clicked onto a pot that is on a line.
+        // HooksHangMore refuses to fill any hanging pot. For that one click, IsHanging
+        // reports false so the pour goes through. A pot on a lamp hook is left alone.
+        private static int _fillLinePot;
+
+        internal static void PrepareLineFill(ShipItemSoup soup, PickupableItem held)
+        {
+            _fillLinePot = 0;
+            if (soup == null || held == null || !IsOnLine(soup))
+                return;
+            ShipItemBottle bottle = held.GetComponent<ShipItemBottle>();
+            if (bottle == null || bottle.amount != 1f)
+                return;
+            HangableItem hang = soup.GetComponent<HangableItem>();
+            if (hang != null)
+                _fillLinePot = hang.GetInstanceID();
+        }
+
+        internal static bool HideLinePotFromFillBlock(HangableItem hang)
+        {
+            return _fillLinePot != 0 && hang != null && hang.GetInstanceID() == _fillLinePot;
+        }
+
+        internal static void EndLineFill()
+        {
+            _fillLinePot = 0;
+        }
+
+        internal static bool IsOnLine(ShipItem ship)
+        {
+            if (ship == null)
+                return false;
+            HangableItem hang = ship.GetComponent<HangableItem>();
+            LineAnchor anchor;
+            return hang != null && Hung.TryGetValue(hang.GetInstanceID(), out anchor) && anchor != null;
+        }
+
+        // A Medi lantern's bail is a flat loop, thin along local Z. Facing across the
+        // line leaves that loop parallel to the rope. A quarter turn around up puts
+        // the opening along the rope, so the lantern hangs from its own bail.
+        internal static void PoseLantern(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!LanternHang.Turn(anchor.Ship))
+                return;
+
+            Vector3 across = anchor.transform.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            anchor.Ship.transform.rotation = Quaternion.LookRotation(across.normalized, Vector3.up)
+                * Quaternion.Euler(0f, 90f, 0f);
+        }
+
+        // A wind chime is pitched so local +Z is up and the tubes fall. The loop at
+        // that top is thin along local Y, so its opening faces across the line. A
+        // quarter turn of yaw puts the opening along the rope. The pitch stays.
+        internal static void PoseWindChime(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!WindChimeHang.Is(anchor.Ship))
+                return;
+
+            Vector3 across = anchor.transform.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            anchor.Ship.transform.rotation = Quaternion.LookRotation(across.normalized, Vector3.up)
+                * Quaternion.Euler(-90f, 90f, 0f);
+        }
+
+        // HooksHangMore rolls a wood mug so its handle, on local -X, points up, and
+        // shifts the mug until that handle meets the hook. The handle's opening
+        // still faces across the line. A quarter turn around the handle puts the
+        // opening along the rope and leaves the handle on the hook.
+        internal static void PoseMug(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!MugHang.Turn(anchor.Ship))
+                return;
+
+            Vector3 across = anchor.transform.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            Quaternion facing = Quaternion.LookRotation(across.normalized, Vector3.up);
+            Quaternion hung = facing * Quaternion.Euler(0f, 0f, 270f);
+            Quaternion turned = facing * Quaternion.Euler(0f, 90f, 270f);
+            Vector3 handle = anchor.Ship.transform.position + hung * MugHang.WoodHandle;
+            anchor.Ship.transform.rotation = turned;
+            anchor.Ship.transform.position = handle - turned * MugHang.WoodHandle;
+        }
+
+        // The hanging ring is edge-on when the item faces across the line. A quarter
+        // turn brings the ring around so the cord passes through it.
+        internal static void PoseWindicator(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            LineAnchor anchor;
+            if (!Hung.TryGetValue(hang.GetInstanceID(), out anchor) || anchor == null || anchor.Ship == null)
+                return;
+            if (!LoopTie.IsWindicator(anchor.Ship))
+                return;
+
+            Vector3 across = anchor.transform.forward;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f)
+                across = Vector3.forward;
+            anchor.Ship.transform.rotation = Quaternion.LookRotation(across.normalized, Vector3.up)
+                * Quaternion.Euler(0f, 90f, 0f);
         }
 
         // The host's whole set of lines, for a joining guest. It comes twice, with the

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
@@ -14,6 +15,9 @@ namespace Dizzy.Clothesline
         // GoPointer.DoRaycast's reach and layer mask.
         private const float Reach = 1.8f;
         private const int LookMask = -604165;
+        // While a hangable item is held, a look this close to the rope counts as
+        // a hit on the rope. The capsules stay thin; this is not a collider.
+        private const float AimRadius = 0.12f;
 
         private const float MinLength = 0.3f;
         private const float RetryWindow = 10f;
@@ -175,6 +179,62 @@ namespace Dizzy.Clothesline
             if (SpyglassTie.Is(ship) || HammerTie.Is(ship))
                 return hang == null || !hang.IsHanging();
             return hang != null && !hang.IsHanging();
+        }
+
+        // A look that passes near a rope while the held item can hang. The point is
+        // on the rope. A target already closer along the ray, other than a line,
+        // blocks it: that look belongs to whatever is in front.
+        internal static bool TryAimHang(
+            Ray ray,
+            PickupableItem held,
+            GoPointerButton current,
+            float currentDistance,
+            out ClotheslineLine line,
+            out Vector3 point,
+            out float along)
+        {
+            line = null;
+            point = default(Vector3);
+            along = 0f;
+            if (!CanHang(held) || LineStore.All.Count == 0)
+                return false;
+
+            Vector3 dir = ray.direction;
+            float scale = dir.magnitude;
+            if (scale < 1e-6f)
+                return false;
+            Ray aimed = new Ray(ray.origin, dir / scale);
+
+            // The line's own capsule is the rope, so it must not block the snap
+            // onto the centerline. Anything else in front of the rope does.
+            float limit = Reach;
+            bool blocked = false;
+            if (current != null && !(current is ClotheslineLine) && currentDistance < limit)
+            {
+                limit = currentDistance;
+                blocked = true;
+            }
+
+            float bestAlong = float.MaxValue;
+            for (int i = 0; i < LineStore.All.Count; i++)
+            {
+                ClotheslineLine live = LineStore.All[i].Live;
+                if (live == null || live.unclickable)
+                    continue;
+                Vector3 segPoint;
+                float segAlong;
+                if (!live.NearestOnRay(aimed, limit, AimRadius, out segPoint, out segAlong))
+                    continue;
+                if (blocked ? segAlong >= limit : segAlong > limit)
+                    continue;
+                if (segAlong >= bestAlong)
+                    continue;
+                bestAlong = segAlong;
+                line = live;
+                point = segPoint;
+                along = segAlong;
+            }
+            return line != null;
         }
 
         // ---- Tying and untying ----
@@ -528,7 +588,7 @@ namespace Dizzy.Clothesline
             LineStore.AddItem(line.Record, record);
 
             HangableItem hang = ship.GetComponent<HangableItem>();
-            if (!HangNow(line, record, hang, ship, true))
+            if (!HangNow(line, record, hang, ship))
             {
                 // Another mod stopped the hang. Keep the item in hand.
                 LineStore.RemoveItem(id);
@@ -542,9 +602,10 @@ namespace Dizzy.Clothesline
             return true;
         }
 
-        // Puts an item on its place on a live line. face: turn it to face across the
-        // line as a player hanging it would; a loaded item keeps its saved turn.
-        private static bool HangNow(ClotheslineLine line, HungRecord record, HangableItem hang, ShipItem ship, bool face)
+        // Puts an item on its place on a live line. The saved world rotation is not
+        // used: the game stores it in world space, so a restart leaves the item
+        // turned against the boat. Face it across the line, then apply the hang pose.
+        private static bool HangNow(ClotheslineLine line, HungRecord record, HangableItem hang, ShipItem ship)
         {
             if (ship == null)
                 return false;
@@ -556,16 +617,19 @@ namespace Dizzy.Clothesline
                 return false;
 
             LineAnchor anchor = line.CreateAnchor(record);
-            PlaceOnAnchor(ship, anchor, face);
+            PlaceOnAnchor(ship, anchor, true);
             hang.ConnectJoint(anchor.Col);
-            if (anchor.Item == hang)
-                return true;
+            if (anchor.Item != hang)
+            {
+                line.RemoveAnchor(anchor);
+                Object.Destroy(anchor.gameObject);
+                SpyglassTie.Detach(ship);
+                HammerTie.Detach(ship);
+                return false;
+            }
 
-            line.RemoveAnchor(anchor);
-            Object.Destroy(anchor.gameObject);
-            SpyglassTie.Detach(ship);
-            HammerTie.Detach(ship);
-            return false;
+            RestoreHangRotation(hang);
+            return true;
         }
 
         // Where HangableItem will pin the item, so the twin is put there too.
@@ -587,11 +651,79 @@ namespace Dizzy.Clothesline
             ship.transform.position = anchor.transform.position - anchor.transform.forward * HookOffset;
         }
 
-        // HooksHangMore turns an item as it hangs, except while the game loads. Turn a
-        // hang that is not a load to face the line first, so it is turned only once.
+        // HooksHangMore adds its yaw once in ConnectJoint, and skips that during a load.
         private static bool Loading
         {
             get { return GameState.currentlyLoading || GameState.loadingBoatLocalItems; }
+        }
+
+        // The line facing is already on the item. During a load, add the yaw
+        // HooksHangMore skipped, then the poses that level a pot or turn a lantern.
+        private static void RestoreHangRotation(HangableItem hang)
+        {
+            if (hang == null)
+                return;
+            if (Loading)
+                ApplyMissedHangYaw(hang);
+            PoseSpyglass(hang);
+            PoseWindicator(hang);
+            PoseHammer(hang);
+            PosePot(hang);
+            PoseLantern(hang);
+            PoseWindChime(hang);
+            PoseMug(hang);
+        }
+
+        private static bool _yawLookup;
+        private static FieldInfo _hangingItems;
+        private static MethodInfo _tryHangOffset;
+        private static PropertyInfo _offsetRotation;
+
+        // Same yaw HooksHangMore.HangablePatches adds in ConnectJoint outside a load.
+        private static void ApplyMissedHangYaw(HangableItem hang)
+        {
+            if (!_yawLookup)
+            {
+                _yawLookup = true;
+                System.Type offsets = AccessTools.TypeByName("HooksHangMore.Offsets");
+                System.Type extensions = AccessTools.TypeByName("HooksHangMore.OffsetsExtensions");
+                if (offsets != null && extensions != null)
+                {
+                    _hangingItems = AccessTools.Field(offsets, "HangingItems");
+                    _offsetRotation = AccessTools.Property(offsets, "Rotation");
+                    List<MethodInfo> methods = AccessTools.GetDeclaredMethods(extensions);
+                    for (int i = 0; i < methods.Count; i++)
+                    {
+                        if (methods[i].Name != "TryGetOffset")
+                            continue;
+                        ParameterInfo[] parameters = methods[i].GetParameters();
+                        if (parameters.Length == 3 && parameters[1].ParameterType == typeof(HangableItem))
+                        {
+                            _tryHangOffset = methods[i];
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (_hangingItems == null || _tryHangOffset == null || _offsetRotation == null)
+                return;
+            object table = _hangingItems.GetValue(null);
+            if (table == null)
+                return;
+            var args = new object[] { table, hang, null };
+            object found = _tryHangOffset.Invoke(null, args);
+            if (!(found is bool) || !(bool)found || args[2] == null)
+                return;
+            object rotation = _offsetRotation.GetValue(args[2], null);
+            if (!(rotation is Vector3))
+                return;
+            float yaw = ((Vector3)rotation).y;
+            if (Mathf.Abs(yaw) < 0.01f)
+                return;
+            Vector3 euler = hang.transform.eulerAngles;
+            euler.y += yaw;
+            hang.transform.eulerAngles = euler;
         }
 
         // HangableItem.ConnectJoint. A place on a line: does what the game does for a
@@ -623,12 +755,13 @@ namespace Dizzy.Clothesline
             if (Hung.TryGetValue(hang.GetInstanceID(), out current))
             {
                 // Coop has just put the item's physics back. Hang it again.
-                PlaceOnAnchor(ship, current, !Loading);
+                PlaceOnAnchor(ship, current, true);
                 Connect(hang, current);
+                RestoreHangRotation(hang);
             }
             else if (line.Live != null && ship != null)
             {
-                HangNow(line.Live, record, hang, ship, !Loading);
+                HangNow(line.Live, record, hang, ship);
             }
             else
             {
@@ -948,7 +1081,7 @@ namespace Dizzy.Clothesline
                         continue;
                     }
 
-                    if (!HangNow(record.Live, item, hang, ship, !Loading))
+                    if (!HangNow(record.Live, item, hang, ship))
                         waiting = true;
                 }
             }
@@ -1064,7 +1197,7 @@ namespace Dizzy.Clothesline
 
             var record = new HungRecord { ItemId = itemId, S = s, Side = side };
             LineStore.AddItem(line, record);
-            if (line.Live != null && ship != null && HangNow(line.Live, record, hang, ship, true))
+            if (line.Live != null && ship != null && HangNow(line.Live, record, hang, ship))
                 return;
 
             Freeze(ship, itemId);
@@ -1085,8 +1218,11 @@ namespace Dizzy.Clothesline
             Unfreeze(itemId);
         }
 
-        // After HangableItem pins an item upright, point a spyglass on a line down
-        // so its objective, along local +Z, hangs below the eyepiece.
+        // Point a spyglass down from its eyepiece, toward the earth, the way a
+        // hanging bundle stays upright. Local +Z is the objective, so it hangs
+        // below the eyepiece. The turn is about that point rather than the mesh
+        // origin. The line's own up would lean the glass out over the deck when
+        // the boat heels.
         internal static void PoseSpyglass(HangableItem hang)
         {
             if (hang == null)
@@ -1098,19 +1234,22 @@ namespace Dizzy.Clothesline
                 return;
 
             Transform hook = anchor.transform;
-            anchor.Ship.transform.position = hook.position - hook.forward * HookOffset;
             Vector3 across = hook.forward;
             across.y = 0f;
             if (across.sqrMagnitude < 1e-6f)
                 across = Vector3.forward;
-            anchor.Ship.transform.rotation = Quaternion.LookRotation(Vector3.down, across.normalized);
+            Quaternion rotation = Quaternion.LookRotation(Vector3.down, across.normalized);
+            Vector3 pin = hook.position - hook.forward * HookOffset;
+            PinHang(anchor.Ship, pin - rotation * SpyglassTie.EyePoint(anchor.Ship), rotation);
         }
 
-        // After HangableItem pins an item upright, turn a hammer so its head, at
-        // the high end of local Z, is up and the handle hangs down. A quarter turn
-        // around that axis brings the wide face of the head out toward the line.
-        // The game pins the mesh origin, which is beside the shaft, so the shaft
-        // is shifted back onto the rope.
+        // Turn a hammer so its head, at the high end of local Z, is up and the
+        // handle hangs toward the earth, the way a hanging bundle stays upright.
+        // A quarter turn around that axis brings the wide face of the head out
+        // toward the line. The turn is about the inner top of the eye, on the pin.
+        // The mesh origin sits beside the shaft, so pivoting there swings the head
+        // off the line. The line's own up would lean the handle out over the deck
+        // when the boat heels.
         internal static void PoseHammer(HangableItem hang)
         {
             if (hang == null)
@@ -1128,10 +1267,26 @@ namespace Dizzy.Clothesline
                 across = Vector3.forward;
             Quaternion rotation = Quaternion.AngleAxis(90f, Vector3.up)
                 * Quaternion.LookRotation(Vector3.up, across.normalized);
-            anchor.Ship.transform.rotation = rotation;
-            Vector3 shaft = rotation * HammerTie.ShaftShift;
-            shaft.y = 0f;
-            anchor.Ship.transform.position = hook.position - hook.forward * HookOffset - shaft;
+            Vector3 pin = hook.position - hook.forward * HookOffset;
+            PinHang(anchor.Ship, pin - rotation * HammerTie.HangPoint, rotation);
+        }
+
+        // The visual body is kinematic, but a leftover spin turns the mesh around
+        // its middle. Plant the attachment point and clear that spin.
+        private static void PinHang(ShipItem ship, Vector3 position, Quaternion rotation)
+        {
+            ship.transform.SetPositionAndRotation(position, rotation);
+            Rigidbody body = ship.GetComponent<Rigidbody>();
+            if (body == null)
+                return;
+            if (!body.isKinematic)
+            {
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
+            }
+            body.position = position;
+            body.rotation = rotation;
         }
 
         // HooksHangMore hangs a pot tilted, with a handle toward the hook. On a line,

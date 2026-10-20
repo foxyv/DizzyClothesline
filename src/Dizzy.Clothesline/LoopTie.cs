@@ -3,9 +3,9 @@ using UnityEngine;
 
 namespace Dizzy.Clothesline
 {
-    // A small loop of the spyglass cord. It passes through the handle, ring or the
-    // top of a hook line and over the clothesline. Those items already hang; this
-    // only draws the cord.
+    // A small loop of the spyglass cord. It passes through the handle, ring, the
+    // top of a hook line, or the eye on a hammer, and over the clothesline. Those
+    // items already hang; this only draws the cord.
     internal sealed class LoopTie : MonoBehaviour
     {
         private const int KettleA = 382;
@@ -18,11 +18,16 @@ namespace Dizzy.Clothesline
 
         private static Material _cord;
 
+        // A one-frame miss can stretch the ring. Recheck on this interval and, if the
+        // handle and the rope are still too far apart, draw the ring at its real size.
+        private const float CheckInterval = 1f;
+
         private Mesh _mesh;
         private Vector3 _rope;
         private Vector3 _axis;
         private Vector3 _passage;
         private float _lineRadius;
+        private float _nextCheck;
 
         internal static void Sync(LineAnchor anchor)
         {
@@ -121,6 +126,17 @@ namespace Dizzy.Clothesline
                 return true;
             }
 
+            // The inner top of the eye on the crown. The ring bites that cord, so
+            // the metal and the wire are the cord itself, not a kettle handle.
+            if (HammerTie.Is(ship))
+            {
+                float cord = HammerTie.CordRadius;
+                passage = HammerTie.HangPoint;
+                metal = cord;
+                wire = cord * 2f;
+                return true;
+            }
+
             // A strung line of hooks or lures. The strings meet at the origin.
             if (ship.GetComponent<ShipItemFishingHook>() != null && ship.transform.Find("HookLineCord") != null)
             {
@@ -141,13 +157,36 @@ namespace Dizzy.Clothesline
                 return;
 
             float lineRadius = ClotheslineConfig.Thickness.Value * 0.5f;
-            Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
-            Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-            if (axis.sqrMagnitude < 1e-8f)
-                return;
-            axis.Normalize();
+            Vector3 rope;
+            Vector3 axis;
+            Vector3 upHint = Vector3.zero;
+            // A hammer's ring is a fixed cord on the eye, the way a bundle's string
+            // is fixed on the bunch. It stands up the shaft. Measuring the live gap
+            // rebuilt it at a new size whenever a load moved the rope.
+            if (HammerTie.Is(ship))
+            {
+                float gap = ClotheslineConfig.HangDrop.Value + HammerTie.Drop(ship);
+                // Local Z is the shaft, up toward the head. The eye is in the YZ
+                // plane, so the bar through it runs on local X and the rope, when
+                // the boat is level, lies on local Y.
+                rope = passage + Vector3.forward * gap;
+                axis = Vector3.up;
+                upHint = Vector3.forward;
+            }
+            else
+            {
+                rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
+                axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
+                if (axis.sqrMagnitude < 1e-8f)
+                    return;
+                axis.Normalize();
+            }
+            // A bad sample must not leave the cord scaled up from an earlier frame.
+            transform.localScale = Vector3.one;
 
-            if (_mesh != null
+            bool check = Time.time >= _nextCheck;
+            if (!check
+                && _mesh != null
                 && (rope - _rope).sqrMagnitude < 1e-8f
                 && (axis - _axis).sqrMagnitude < 1e-8f
                 && (passage - _passage).sqrMagnitude < 1e-8f
@@ -167,7 +206,9 @@ namespace Dizzy.Clothesline
                 renderer.receiveShadows = false;
             }
 
-            Build(_mesh, rope, axis, passage, lineRadius, lineRadius / 3f, metal, wire);
+            Build(_mesh, rope, axis, passage, lineRadius, lineRadius / 3f, metal, wire, check, upHint);
+            if (check)
+                _nextCheck = Time.time + CheckInterval;
             _rope = rope;
             _axis = axis;
             _passage = passage;
@@ -178,17 +219,36 @@ namespace Dizzy.Clothesline
         // and the crown bites the same fraction into the clothesline.
         private static void Build(
             Mesh mesh, Vector3 rope, Vector3 ropeAxis, Vector3 passage,
-            float lineRadius, float cordRadius, float metalHalf, float wire)
+            float lineRadius, float cordRadius, float metalHalf, float wire, bool fix, Vector3 upHint)
         {
-            Vector3 up = Vector3.up - ropeAxis * Vector3.Dot(Vector3.up, ropeAxis);
+            Vector3 upSource = upHint.sqrMagnitude > 1e-8f ? upHint : Vector3.up;
+            Vector3 up = upSource - ropeAxis * Vector3.Dot(upSource, ropeAxis);
             if (up.sqrMagnitude < 1e-8f)
                 up = Vector3.forward;
             up.Normalize();
-            Vector3 flank = Vector3.Cross(ropeAxis, up).normalized;
+            Vector3 flank = Vector3.Cross(ropeAxis, up);
+            if (flank.sqrMagnitude < 1e-8f)
+                flank = Vector3.right;
+            flank.Normalize();
 
+            // The handle and the rope are a couple of centimetres apart when the item
+            // is on the pin. A physics or scale sample can put them metres apart for a
+            // frame, and the ring was growing to cover that whole gap. Ignore that
+            // frame. On the timed check, draw the ring at its usual size instead.
+            const float maxReach = 0.2f;
             Vector3 rel = passage - rope;
-            float passU = Vector3.Dot(rel, flank);
-            float passV = Vector3.Dot(rel, up);
+            if (!Finite(rel) || !Finite(rope) || rel.sqrMagnitude > maxReach * maxReach)
+            {
+                if (mesh.vertexCount > 0 && !fix)
+                    return;
+                rel = up * 0.03f;
+                rope = passage - rel;
+            }
+
+            // A sideways miss of a centimetre still widens the ring onto the handle.
+            // It does not get to set the diameter.
+            float passU = Mathf.Clamp(Vector3.Dot(rel, flank), -0.05f, 0.05f);
+            float passV = Mathf.Clamp(Vector3.Dot(rel, up), -0.12f, 0.12f);
             // Five percent of the wire, so the cord sits in the handle instead of above it.
             float seat = passV - cordRadius + wire * 0.05f;
             float arc = lineRadius + cordRadius;
@@ -254,6 +314,18 @@ namespace Dizzy.Clothesline
             _cord.name = "Dizzy Clothesline Loop";
             _cord.color = new Color(0.28f, 0.14f, 0.06f);
             return _cord;
+        }
+
+        private void LateUpdate()
+        {
+            if (transform.localScale != Vector3.one)
+                transform.localScale = Vector3.one;
+        }
+
+        private static bool Finite(Vector3 v)
+        {
+            return !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z)
+                && !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
         }
 
         private void OnDestroy()

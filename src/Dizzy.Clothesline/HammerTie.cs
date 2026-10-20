@@ -4,44 +4,54 @@ using UnityEngine;
 
 namespace Dizzy.Clothesline
 {
-    // A thin cord that hangs a hammer head up. One turn sits on the handle just
-    // under the head, and two strands run up the sides of the head and meet on
-    // top of the clothesline.
+    // A thin cord eye on the crown of a hammer. The eye does not reach the rope.
+    // A D-ring, drawn by LoopTie, passes through the top of the eye and over the
+    // clothesline.
     //
     // The handle lies along local Z. The head is the wide end at the high Z.
-    // A hammer is not hangable in the game. HangableItem is added only while it
-    // is on a line, and taken off again when it comes down.
+    // After the hang pose the rope lies along local Y, so the eye stands in that
+    // plane and the ring's bar threads it along local X. A hammer is not hangable
+    // in the game. HangableItem is added only while it is on a line, and taken off
+    // again when it comes down.
     internal sealed class HammerTie : MonoBehaviour
     {
-        // Handle axis and the head, measured from the mesh. The head begins at
-        // about 0.33 and the handle below it is a 3.2 cm radius shaft at x = 0.10.
+        // Handle axis and the head, measured from the mesh. The crown is the small
+        // cap at the high Z, on the shaft at x = 0.10.
         private const float AxisX = 0.10f;
         private const float AxisY = -0.002f;
-
-        // From the mesh origin to the handle shaft. The game pins the origin, so the
-        // pose subtracts this or the hammer hangs beside the rope.
-        internal static Vector3 ShaftShift
-        {
-            get { return new Vector3(AxisX, AxisY, 0f); }
-        }
-        private const float HandleRadius = 0.032f;
-        private const float WrapZ = 0.292f;
         private const float HeadTop = 0.430f;
-        private const float HeadHalf = 0.040f;
+
+        // Hole in the eye, in metres. Large enough to clear the crown and to leave
+        // the top of the eye above the head.
+        private const float EyeInside = 0.025f;
+
+        // Inner top of the eye, on the shaft. The pose puts this point on the line's
+        // down through the rope, and the D-ring bites it.
+        internal static Vector3 HangPoint
+        {
+            get { return new Vector3(AxisX, AxisY, HeadTop + EyeInside); }
+        }
+
+        internal static float CordRadius
+        {
+            get { return ClotheslineConfig.Thickness.Value * 0.5f / 3f; }
+        }
 
         private static AccessTools.FieldRef<HangableItem, bool> _disallow;
+        private static AccessTools.FieldRef<HangableItem, bool> _lockX;
+        private static AccessTools.FieldRef<HangableItem, bool> _lockZ;
         private static Material _cord;
 
         private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private float _ropeRadius;
+        private float _cordRadius;
 
         static HammerTie()
         {
             try
             {
                 _disallow = AccessTools.FieldRefAccess<HangableItem, bool>("disallowHangingOnTrigger");
+                _lockX = AccessTools.FieldRefAccess<HangableItem, bool>("lockX");
+                _lockZ = AccessTools.FieldRefAccess<HangableItem, bool>("lockZ");
             }
             catch (System.Exception ex)
             {
@@ -54,13 +64,13 @@ namespace Dizzy.Clothesline
             return ship != null && ship.GetComponent<ShipItemHammer>() != null;
         }
 
-        // How far below the usual pin the origin sits so the top of the head, not
-        // the origin, is the part just under the rope.
+        // The pose puts the inner top of the eye on the pin. This is only the extra
+        // gap under the rope, so the eye is not buried in the line.
         internal static float Drop(ShipItem ship)
         {
             if (!Is(ship))
                 return 0f;
-            return HeadTop - ClotheslineConfig.HangDrop.Value + ClotheslineConfig.Thickness.Value * 0.5f + 0.012f;
+            return ClotheslineConfig.Thickness.Value * 0.5f + 0.012f - ClotheslineConfig.HangDrop.Value;
         }
 
         internal static HangableItem Prepare(ShipItem ship)
@@ -75,6 +85,12 @@ namespace Dizzy.Clothesline
             }
             if (_disallow != null)
                 _disallow(hang) = true;
+            // The game's lock keeps X and Z at 0, so the hammer can only yaw around
+            // world up through the origin. The hang turns about the eye.
+            if (_lockX != null)
+                _lockX(hang) = false;
+            if (_lockZ != null)
+                _lockZ(hang) = false;
             return hang;
         }
 
@@ -104,7 +120,7 @@ namespace Dizzy.Clothesline
                 anchor.Hammer = go.AddComponent<HammerTie>();
             }
 
-            anchor.Hammer.Follow(anchor);
+            anchor.Hammer.Follow();
         }
 
         internal static void Clear(LineAnchor anchor)
@@ -115,24 +131,14 @@ namespace Dizzy.Clothesline
             anchor.Hammer = null;
         }
 
-        private void Follow(LineAnchor anchor)
+        // The eye is fixed on the hammer. A roll of the boat does not move it, so
+        // it is built once. Only a change of cord thickness draws it again.
+        private void Follow()
         {
-            ClotheslineLine line = anchor.Line;
-            ShipItem ship = anchor.Ship;
-            if (line == null || ship == null || anchor.Record == null)
+            float cordRadius = CordRadius;
+            if (cordRadius < 1e-5f)
                 return;
-
-            float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
-            Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
-            Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-            if (axis.sqrMagnitude < 1e-8f)
-                return;
-            axis.Normalize();
-
-            if (_mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f)
+            if (_mesh != null && Mathf.Abs(cordRadius - _cordRadius) < 1e-5f)
                 return;
 
             if (_mesh == null)
@@ -148,61 +154,25 @@ namespace Dizzy.Clothesline
                 renderer.receiveShadows = false;
             }
 
-            Build(_mesh, rope, axis, ropeRadius, ropeRadius / 3f);
-            _rope = rope;
-            _axis = axis;
-            _ropeRadius = ropeRadius;
+            Build(_mesh, cordRadius);
+            _cordRadius = cordRadius;
         }
 
-        // One turn on the handle, then two strands up the narrow sides of the head.
-        // They stop where they meet, on top of the clothesline.
-        private static void Build(Mesh mesh, Vector3 rope, Vector3 ropeAxis, float lineRadius, float cordRadius)
+        // One closed loop in the YZ plane, centered on the crown. The hole is
+        // EyeInside across, so the cord itself sits just outside the cap.
+        private static void Build(Mesh mesh, float cordRadius)
         {
-            Vector3 center = new Vector3(AxisX, AxisY, WrapZ);
-            float loopR = HandleRadius + cordRadius * 0.35f;
-            Vector3 side = Vector3.right;
-            Vector3 around = Vector3.up;
-
+            Vector3 center = new Vector3(AxisX, AxisY, HeadTop);
+            float loopR = EyeInside + cordRadius;
             const int loopSegs = 24;
             var loop = new Vector3[loopSegs + 1];
             for (int i = 0; i <= loopSegs; i++)
             {
                 float ang = i * Mathf.PI * 2f / loopSegs;
-                loop[i] = center + (side * Mathf.Cos(ang) + around * Mathf.Sin(ang)) * loopR;
+                loop[i] = center + (Vector3.up * Mathf.Cos(ang) + Vector3.forward * Mathf.Sin(ang)) * loopR;
             }
 
-            Vector3 leftLoop = center + side * loopR;
-            Vector3 rightLoop = center - side * loopR;
-            float flare = HeadHalf + cordRadius;
-            Vector3 leftHead = new Vector3(AxisX + flare, AxisY, HeadTop - 0.02f);
-            Vector3 rightHead = new Vector3(AxisX - flare, AxisY, HeadTop - 0.02f);
-
-            Vector3 station = rope + ropeAxis * Vector3.Dot(center - rope, ropeAxis);
-            Vector3 down = center - station;
-            down -= ropeAxis * Vector3.Dot(down, ropeAxis);
-            if (down.sqrMagnitude < 1e-8f)
-                down = -Vector3.forward;
-            down.Normalize();
-            Vector3 meet = station - down * (lineRadius + cordRadius * 0.5f);
-            float split = cordRadius * 0.4f;
-
-            var paths = new List<Vector3[]>
-            {
-                loop,
-                Strand(leftLoop, leftHead, meet - ropeAxis * split),
-                Strand(rightLoop, rightHead, meet + ropeAxis * split),
-            };
-            RopeMesh.Build(mesh, paths, cordRadius);
-        }
-
-        private static Vector3[] Strand(Vector3 fromLoop, Vector3 besideHead, Vector3 meet)
-        {
-            var pts = new Vector3[8];
-            for (int i = 0; i < 4; i++)
-                pts[i] = Vector3.Lerp(fromLoop, besideHead, i / 3f);
-            for (int i = 1; i <= 4; i++)
-                pts[3 + i] = Vector3.Lerp(besideHead, meet, i / 4f);
-            return pts;
+            RopeMesh.Build(mesh, new List<Vector3[]> { loop }, cordRadius);
         }
 
         private static Material Cord()

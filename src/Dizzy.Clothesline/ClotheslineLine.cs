@@ -12,8 +12,6 @@ namespace Dizzy.Clothesline
     internal sealed class ClotheslineLine : GoPointerButton
     {
         private const int MeshSegments = 24;
-        private const int ColliderSegments = 12;
-        private const float ColliderRadius = 0.03f;
         // Items stay at least this far from the hooks, clear of the hooks' own colliders.
         // A knot longer than this pushes them out past the knot as well.
         private const float EndGap = 0.15f;
@@ -219,6 +217,95 @@ namespace Dizzy.Clothesline
             return transform.TransformPoint(Point(Mathf.Clamp01(s)));
         }
 
+        // The closest point on this rope to a look ray. Only points in front of the
+        // ray, no farther than maxAlong, and within maxMiss of it, are considered.
+        // The winner is the closest of those, so a click lands on the rope.
+        internal bool NearestOnRay(Ray ray, float maxAlong, float maxMiss, out Vector3 point, out float along)
+        {
+            point = default(Vector3);
+            along = 0f;
+            float bestMiss = maxMiss * maxMiss;
+            bool found = false;
+            Vector3 origin = ray.origin;
+            Vector3 dir = ray.direction;
+            Vector3 previous = RopeWorld(0f);
+            for (int i = 1; i <= MeshSegments; i++)
+            {
+                Vector3 next = RopeWorld(i / (float)MeshSegments);
+                float segAlong;
+                Vector3 segPoint;
+                float miss;
+                if (SegmentApproach(origin, dir, previous, next, maxAlong, out segAlong, out segPoint, out miss)
+                    && miss <= bestMiss
+                    && (!found || miss < bestMiss || (miss == bestMiss && segAlong < along)))
+                {
+                    bestMiss = miss;
+                    point = segPoint;
+                    along = segAlong;
+                    found = true;
+                }
+                previous = next;
+            }
+            return found;
+        }
+
+        // Closest points of the ray and one rope sample. miss is squared.
+        private static bool SegmentApproach(
+            Vector3 origin, Vector3 dir, Vector3 a, Vector3 b, float maxAlong,
+            out float along, out Vector3 point, out float miss)
+        {
+            along = 0f;
+            point = a;
+            miss = 0f;
+            Vector3 ab = b - a;
+            float abLen2 = ab.sqrMagnitude;
+            if (abLen2 < 1e-10f || !Finite(a) || !Finite(b))
+                return false;
+
+            Vector3 ao = origin - a;
+            float dAb = Vector3.Dot(dir, ab);
+            float dAo = Vector3.Dot(dir, ao);
+            float abAo = Vector3.Dot(ab, ao);
+            float denom = abLen2 - dAb * dAb;
+            float s;
+            if (denom < 1e-8f)
+            {
+                float alongA = Vector3.Dot(a - origin, dir);
+                float alongB = Vector3.Dot(b - origin, dir);
+                if (alongA < 0f && alongB < 0f)
+                    return false;
+                if (alongA < 0f)
+                    s = 1f;
+                else if (alongB < 0f)
+                    s = 0f;
+                else
+                    s = alongA <= alongB ? 0f : 1f;
+            }
+            else
+            {
+                s = (dAb * dAo - abAo) / denom;
+                if (s < 0f)
+                    s = 0f;
+                else if (s > 1f)
+                    s = 1f;
+            }
+
+            point = a + ab * s;
+            if (!Finite(point))
+                return false;
+            along = Vector3.Dot(point - origin, dir);
+            if (along < 0f || along > maxAlong)
+                return false;
+            miss = (point - (origin + dir * along)).sqrMagnitude;
+            return true;
+        }
+
+        private static bool Finite(Vector3 v)
+        {
+            return !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z)
+                && !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
+        }
+
         internal Vector3 RopeDirectionWorld(float s)
         {
             float a = Mathf.Clamp01(s - 0.01f);
@@ -240,8 +327,11 @@ namespace Dizzy.Clothesline
 
         private void RebuildColliders()
         {
-            int per = MeshSegments / ColliderSegments;
-            for (int i = 0; i < ColliderSegments; i++)
+            // The rope's own radius, plus a few millimetres. A fatter capsule hangs
+            // in the air under the line, and growing it while an item is held moves
+            // the spot the pointer has to find.
+            float radius = ClotheslineConfig.Thickness.Value * 0.5f + 0.006f;
+            for (int i = 0; i < MeshSegments; i++)
             {
                 CapsuleCollider col;
                 if (i < _segments.Count)
@@ -259,14 +349,14 @@ namespace Dizzy.Clothesline
                     _segments.Add(col);
                 }
 
-                Vector3 from = _points[i * per];
-                Vector3 to = _points[(i + 1) * per];
+                Vector3 from = _points[i];
+                Vector3 to = _points[i + 1];
                 Vector3 along = to - from;
                 float length = along.magnitude;
                 col.transform.localPosition = (from + to) * 0.5f;
                 col.transform.localRotation = length > 1e-4f ? Quaternion.LookRotation(along / length, Vector3.up) : Quaternion.identity;
-                col.radius = ColliderRadius;
-                col.height = length + ColliderRadius * 2f;
+                col.radius = radius;
+                col.height = length + radius * 2f;
             }
         }
 
@@ -303,8 +393,8 @@ namespace Dizzy.Clothesline
             float s = anchor.Record.S;
             Vector3 across = Across(s) * anchor.Record.Side;
             anchor.transform.localRotation = Quaternion.LookRotation(across, Vector3.up);
-            // A spyglass is pinned by its origin, which sits near the objective. Drop
-            // it until the eyepiece, at the top, is the part under the rope.
+            // Extra gap so an eyepiece, a hammer head, or a handle is not buried in
+            // the rope. The pose itself puts that point on the pin.
             float drop = SpyglassTie.Drop(anchor.Ship) + HammerTie.Drop(anchor.Ship) + PotTie.Drop(anchor.Ship)
                 + LanternHang.Drop(anchor.Ship) + WindChimeHang.Drop(anchor.Ship)
                 + MugHang.Drop(anchor.Ship);

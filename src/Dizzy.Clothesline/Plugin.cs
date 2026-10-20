@@ -12,7 +12,7 @@ namespace Dizzy.Clothesline
     {
         public const string PluginGuid = "com.dizzy.sailwind.clothesline";
         public const string PluginName = "Dizzy Clothesline";
-        public const string PluginVersion = "0.3.0";
+        public const string PluginVersion = "0.3.12";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;

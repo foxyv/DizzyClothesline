@@ -5,8 +5,9 @@ using UnityEngine;
 namespace Dizzy.Clothesline
 {
     // A thin cord that hangs a spyglass. The glass points down. One loop sits a
-    // little below the eyepiece, and two strands run up to the top and cross on
-    // the clothesline.
+    // little below the eyepiece, and two strands run up to the top and cross
+    // above it. The cord is fixed on the glass, the way a bundle's string is
+    // fixed on the bunch, so a heel does not stretch it.
     //
     // The barrel lies along local Z and the player looks out along +Z, so the
     // eyepiece is the wide end at the most negative Z. A spyglass is not hangable
@@ -21,6 +22,8 @@ namespace Dizzy.Clothesline
         private const int SmallestPrefab = 162;
 
         private static AccessTools.FieldRef<HangableItem, bool> _disallow;
+        private static AccessTools.FieldRef<HangableItem, bool> _lockX;
+        private static AccessTools.FieldRef<HangableItem, bool> _lockZ;
 
         private static Material _cord;
 
@@ -36,6 +39,8 @@ namespace Dizzy.Clothesline
             try
             {
                 _disallow = AccessTools.FieldRefAccess<HangableItem, bool>("disallowHangingOnTrigger");
+                _lockX = AccessTools.FieldRefAccess<HangableItem, bool>("lockX");
+                _lockZ = AccessTools.FieldRefAccess<HangableItem, bool>("lockZ");
             }
             catch (System.Exception ex)
             {
@@ -48,18 +53,24 @@ namespace Dizzy.Clothesline
             return ship != null && ship.GetComponent<ShipItemSpyglass>() != null;
         }
 
-        // How far below the usual pin the item origin has to sit so the eyepiece,
-        // not the origin, meets the line. One rope thickness extra, so the knot
-        // around the eyepiece is not buried in the clothesline.
+        // The pose puts the eyepiece on the pin. This is only the extra gap under
+        // the rope, so the knot around the eyepiece is not buried in the line.
         internal static float Drop(ShipItem ship)
         {
             if (!Is(ship))
                 return 0f;
-            MeshFilter filter = ship.GetComponent<MeshFilter>();
+            return ClotheslineConfig.Thickness.Value;
+        }
+
+        // The wide end the cord is tied around. The barrel runs along local Z, and
+        // this end is the most negative Z. The pose pivots on this point.
+        internal static Vector3 EyePoint(ShipItem ship)
+        {
+            MeshFilter filter = ship != null ? ship.GetComponent<MeshFilter>() : null;
             Mesh mesh = filter != null ? filter.sharedMesh : null;
             if (mesh == null)
-                return 0.45f;
-            return -mesh.bounds.min.z + ClotheslineConfig.Thickness.Value;
+                return new Vector3(0f, 0f, -0.45f);
+            return new Vector3(0f, 0f, mesh.bounds.min.z);
         }
 
         // The component the line's hang path already understands. Added fresh, so
@@ -76,6 +87,12 @@ namespace Dizzy.Clothesline
             }
             if (_disallow != null)
                 _disallow(hang) = true;
+            // The game's lock keeps X and Z at 0, so the glass can only yaw around
+            // world up through the origin. The hang turns about the eyepiece instead.
+            if (_lockX != null)
+                _lockX(hang) = false;
+            if (_lockZ != null)
+                _lockZ(hang) = false;
             return hang;
         }
 
@@ -131,11 +148,12 @@ namespace Dizzy.Clothesline
             float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
             float cupRadius = Mathf.Max(barrel.bounds.extents.x, barrel.bounds.extents.y);
             float eyeZ = barrel.bounds.min.z;
-            Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
-            Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-            if (axis.sqrMagnitude < 1e-8f)
-                return;
-            axis.Normalize();
+            // The eyepiece sits on the pin, and the pin is this far under the rope
+            // along the glass once it is hanging straight down. The cord is that
+            // shape, in the glass. It is not rebuilt from the rope's position.
+            float gap = ClotheslineConfig.HangDrop.Value + Drop(ship);
+            Vector3 rope = new Vector3(0f, 0f, eyeZ - gap);
+            Vector3 axis = Vector3.right;
 
             if (_mesh != null
                 && (rope - _rope).sqrMagnitude < 1e-8f

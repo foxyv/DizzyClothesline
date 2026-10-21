@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace Dizzy.Clothesline
@@ -14,10 +13,23 @@ namespace Dizzy.Clothesline
 
         private static Material _iron;
 
-        private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private float _lineRadius;
+        private Transform _arc;
+        private Transform _rise;
+        private Mesh _arcMesh;
+        private Mesh _riseMesh;
+        private Motion _motion;
+
+        internal struct Motion
+        {
+            public bool Built;
+            public float LineRadius;
+            public Vector3 ArcStart;
+            public Vector3 ArcPos;
+            public Quaternion ArcRot;
+            public Vector3 RisePos;
+            public Quaternion RiseRot;
+            public Vector3 RiseScale;
+        }
 
         internal static bool IsRack(ShipItem ship)
         {
@@ -59,72 +71,142 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
                 return;
 
+            transform.localPosition = Vector3.zero;
+            transform.localRotation = Quaternion.identity;
+            transform.localScale = Vector3.one;
+
             float lineRadius = ClotheslineConfig.Thickness.Value * 0.5f;
             Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
             Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-            if (axis.sqrMagnitude < 1e-8f)
+            if (axis.sqrMagnitude < 1e-8f || !Finite(rope) || !Finite(axis))
                 return;
             axis.Normalize();
 
-            if (_mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && Mathf.Abs(lineRadius - _lineRadius) < 1e-5f)
-                return;
-
-            if (_mesh == null)
+            // The hook is built once around a canonical rope. Turning it lays the
+            // arc over the real rope, and the rise is scaled out to meet the rack.
+            if (Wants(_motion, lineRadius))
             {
-                _mesh = new Mesh { name = "Clothesline Rack Hook" };
-                // modcheck-ignore: SW605 fresh hook object, there is nothing to reuse
-                MeshFilter filter = gameObject.AddComponent<MeshFilter>();
-                filter.sharedMesh = _mesh;
-                // modcheck-ignore: SW605 fresh hook object, there is nothing to reuse
-                MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
-                renderer.sharedMaterial = Iron();
-                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
+                Ensure(ref _arc, ref _arcMesh, "clothesline rack arc");
+                Ensure(ref _rise, ref _riseMesh, "clothesline rack rise");
             }
 
-            Build(_mesh, rope, axis, lineRadius);
-            _rope = rope;
-            _axis = axis;
-            _lineRadius = lineRadius;
+            Step(ref _motion, rope, axis, lineRadius, _arcMesh, _riseMesh);
+            if (_arc == null || !_motion.Built)
+                return;
+
+            _arc.localPosition = _motion.ArcPos;
+            _arc.localRotation = _motion.ArcRot;
+            _arc.localScale = Vector3.one;
+            _rise.localPosition = _motion.RisePos;
+            _rise.localRotation = _motion.RiseRot;
+            _rise.localScale = _motion.RiseScale;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Rack, stamp);
+            }
         }
 
-        // From the top of the rack's wire, up to the rope, over the top, and another
-        // quarter turn down the far side so the wire stays hooked.
-        private static void Build(Mesh mesh, Vector3 rope, Vector3 ropeAxis, float lineRadius)
+        internal static bool Wants(in Motion motion, float lineRadius)
         {
-            Vector3 towardRack = -rope;
-            towardRack -= ropeAxis * Vector3.Dot(towardRack, ropeAxis);
-            if (towardRack.sqrMagnitude < 1e-8f)
-                towardRack = Vector3.down;
-            towardRack.Normalize();
-            Vector3 flank = Vector3.Cross(ropeAxis, towardRack).normalized;
+            return !motion.Built || Mathf.Abs(lineRadius - motion.LineRadius) > 1e-5f;
+        }
 
+        internal static void Step(ref Motion motion, Vector3 rope, Vector3 axis, float lineRadius, Mesh arcMesh, Mesh riseMesh)
+        {
+            if (Wants(motion, lineRadius))
+            {
+                motion.ArcStart = BuildArc(arcMesh, lineRadius);
+                BuildRise(riseMesh);
+                motion.LineRadius = lineRadius;
+                motion.Built = true;
+            }
+
+            Vector3 toward = -rope;
+            toward -= axis * Vector3.Dot(toward, axis);
+            if (toward.sqrMagnitude < 1e-8f)
+                toward = Vector3.down;
+            toward.Normalize();
+            Vector3 flank = Vector3.Cross(axis, toward);
+            if (flank.sqrMagnitude < 1e-8f)
+                return;
+
+            motion.ArcPos = rope;
+            motion.ArcRot = CordTurn.Look(flank.normalized, toward);
+            Vector3 root = Vector3.down * 0.008f;
+            Vector3 meet = motion.ArcPos + motion.ArcRot * motion.ArcStart;
+            AimRise(ref motion.RisePos, ref motion.RiseRot, ref motion.RiseScale, root, meet);
+        }
+
+        // The arc in its own space. Local X is the rope, local Y faces the rack.
+        private static Vector3 BuildArc(Mesh mesh, float lineRadius)
+        {
             float arcR = lineRadius + WireRadius;
-            Vector3 meet = rope + towardRack * arcR;
-            var rise = new Vector3[5];
-            rise[0] = Vector3.down * 0.008f;
-            for (int i = 1; i < rise.Length; i++)
-                rise[i] = Vector3.Lerp(Vector3.zero, meet, (i - 1) / (float)(rise.Length - 2));
-
+            Vector3 toward = Vector3.up;
+            Vector3 flank = Vector3.Cross(Vector3.right, toward).normalized;
             const float turn = Mathf.PI + 0.65f + Mathf.PI * 0.5f;
             const int segs = 26;
             var arc = new Vector3[segs + 1];
             for (int i = 0; i <= segs; i++)
             {
                 float ang = turn * i / segs;
-                arc[i] = rope + (towardRack * Mathf.Cos(ang) + flank * Mathf.Sin(ang)) * arcR;
+                arc[i] = (toward * Mathf.Cos(ang) + flank * Mathf.Sin(ang)) * arcR;
             }
 
-            var paths = new List<Vector3[]> { rise, arc };
-            RopeMesh.Build(mesh, paths, WireRadius);
+            RopeMesh.Build(mesh, arc, WireRadius, Profile.Kind.Rack);
+            return arc[0];
+        }
+
+        private static void BuildRise(Mesh mesh)
+        {
+            RopeMesh.Build(mesh, new[] { Vector3.zero, Vector3.forward }, WireRadius, Profile.Kind.Rack);
+        }
+
+        private static void AimRise(ref Vector3 pos, ref Quaternion rot, ref Vector3 scale, Vector3 from, Vector3 to)
+        {
+            Vector3 delta = to - from;
+            float length = delta.magnitude;
+            if (length < 1e-5f)
+            {
+                scale = Vector3.zero;
+                return;
+            }
+            pos = from;
+            rot = CordTurn.Look(delta / length);
+            scale = new Vector3(1f, 1f, length);
+        }
+
+        private void Ensure(ref Transform child, ref Mesh mesh, string name)
+        {
+            if (child != null)
+                return;
+            // modcheck-ignore: SW605 fresh hook object, there is nothing to reuse
+            var go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            mesh = new Mesh { name = name };
+            // modcheck-ignore: SW605 fresh hook object, there is nothing to reuse
+            MeshFilter filter = go.AddComponent<MeshFilter>();
+            filter.sharedMesh = mesh;
+            // modcheck-ignore: SW605 fresh hook object, there is nothing to reuse
+            MeshRenderer renderer = go.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = Iron();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            child = go.transform;
+        }
+
+        private static bool Finite(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsNaN(value.y) && !float.IsNaN(value.z)
+                && !float.IsInfinity(value.x) && !float.IsInfinity(value.y) && !float.IsInfinity(value.z);
         }
 
         // The same flat black the rack's own wire uses.
@@ -153,8 +235,10 @@ namespace Dizzy.Clothesline
 
         private void OnDestroy()
         {
-            if (_mesh != null)
-                Destroy(_mesh);
+            if (_arcMesh != null)
+                Destroy(_arcMesh);
+            if (_riseMesh != null)
+                Destroy(_riseMesh);
         }
     }
 }

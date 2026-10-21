@@ -11,9 +11,7 @@ namespace Dizzy.Clothesline
         private const string SausageName = "sausage";
 
         private Mesh _mesh;
-        private Vector3 _open;
-        private float _drop;
-        private float _ropeRadius;
+        private LineEye.Aim _aim;
 
         internal static void Sync(LineAnchor anchor)
         {
@@ -52,6 +50,9 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
@@ -61,16 +62,6 @@ namespace Dizzy.Clothesline
             float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
             Vector3 along = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
             along.y = 0f;
-            if (along.sqrMagnitude < 1e-8f)
-                along = Vector3.right;
-            along.Normalize();
-
-            if (_mesh != null
-                && (along - _open).sqrMagnitude < 1e-8f
-                && Mathf.Abs(drop - _drop) < 1e-5f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f)
-                return;
-
             if (_mesh == null)
             {
                 _mesh = new Mesh { name = "Clothesline Sausage Knot" };
@@ -84,11 +75,16 @@ namespace Dizzy.Clothesline
                 renderer.receiveShadows = false;
             }
 
-            if (!LineEye.Build(_mesh, along, drop, ropeRadius, out _))
+            if (!LineEye.Step(ref _aim, along, drop, ropeRadius, _mesh, Profile.Kind.Sausage))
                 return;
-            _open = along;
-            _drop = drop;
-            _ropeRadius = ropeRadius;
+            transform.localPosition = Vector3.zero;
+            transform.localRotation = _aim.Rotation;
+            transform.localScale = Vector3.one;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Sausage, stamp);
+            }
         }
     }
 }

@@ -13,9 +13,7 @@ namespace Dizzy.Clothesline
 
         private Mesh _mesh;
         private Material _material;
-        private Vector3 _open;
-        private float _drop;
-        private float _ropeRadius;
+        private LineEye.Aim _aim;
         private Color _color;
 
         internal static void Sync(LineAnchor anchor)
@@ -55,6 +53,9 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
@@ -64,18 +65,7 @@ namespace Dizzy.Clothesline
             float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
             Vector3 along = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
             along.y = 0f;
-            if (along.sqrMagnitude < 1e-8f)
-                along = Vector3.right;
-            along.Normalize();
             Color color = NetColor(ship);
-
-            if (_mesh != null
-                && (along - _open).sqrMagnitude < 1e-8f
-                && Mathf.Abs(drop - _drop) < 1e-5f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f
-                && color == _color)
-                return;
-
             if (_mesh == null)
             {
                 _mesh = new Mesh { name = "Clothesline Bag Knot" };
@@ -90,17 +80,22 @@ namespace Dizzy.Clothesline
                 renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 renderer.receiveShadows = false;
             }
-            else if (_material != null)
+            else if (_material != null && color != _color)
             {
                 _material.color = color;
             }
 
-            if (!LineEye.Build(_mesh, along, drop, ropeRadius, out _))
+            if (!LineEye.Step(ref _aim, along, drop, ropeRadius, _mesh, Profile.Kind.Bag))
                 return;
-            _open = along;
-            _drop = drop;
-            _ropeRadius = ropeRadius;
             _color = color;
+            transform.localPosition = Vector3.zero;
+            transform.localRotation = _aim.Rotation;
+            transform.localScale = Vector3.one;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Bag, stamp);
+            }
         }
 
         // The net strands are the bag's own cord. Copy that material so a dyed bag

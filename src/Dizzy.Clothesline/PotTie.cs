@@ -25,10 +25,26 @@ namespace Dizzy.Clothesline
         private static Material _cord;
 
         private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private float _ropeRadius;
-        private float _body;
+        private Transform _left;
+        private Transform _right;
+        private Mesh _leftMesh;
+        private Mesh _rightMesh;
+        private Motion _motion;
+
+        // Loops and the rise to the rim are built once. The two strands up to the
+        // rope are unit tubes, scaled out to wherever the line sits this frame.
+        internal struct Motion
+        {
+            public bool Built;
+            public float RopeRadius;
+            public float Wall;
+            public Vector3 LeftPos;
+            public Quaternion LeftRot;
+            public Vector3 LeftScale;
+            public Vector3 RightPos;
+            public Quaternion RightRot;
+            public Vector3 RightScale;
+        }
 
         internal static bool Is(ShipItem ship)
         {
@@ -81,6 +97,9 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor, float wall)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
@@ -93,49 +112,108 @@ namespace Dizzy.Clothesline
                 return;
             axis.Normalize();
 
-            if (_mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f
-                && Mathf.Abs(wall - _body) < 1e-5f)
-                return;
-
-            if (_mesh == null)
+            if (Wants(_motion, ropeRadius, wall))
             {
-                _mesh = new Mesh { name = "Clothesline Pot Tie" };
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshFilter filter = gameObject.AddComponent<MeshFilter>();
-                filter.sharedMesh = _mesh;
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
-                renderer.sharedMaterial = Cord();
-                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
+                if (_mesh == null)
+                {
+                    _mesh = new Mesh { name = "Clothesline Pot Tie" };
+                    // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+                    MeshFilter filter = gameObject.AddComponent<MeshFilter>();
+                    filter.sharedMesh = _mesh;
+                    // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+                    MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
+                    renderer.sharedMaterial = Cord();
+                    renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    renderer.receiveShadows = false;
+                }
+
+                Ensure(ref _left, ref _leftMesh, "clothesline pot left");
+                Ensure(ref _right, ref _rightMesh, "clothesline pot right");
             }
 
-            Build(_mesh, rope, axis, ropeRadius, ropeRadius / 3f, wall);
-            _rope = rope;
-            _axis = axis;
-            _ropeRadius = ropeRadius;
-            _body = wall;
+            Step(ref _motion, rope, axis, ropeRadius, wall, _mesh, _leftMesh, _rightMesh);
+            if (!_motion.Built || _left == null)
+                return;
+
+            _left.localPosition = _motion.LeftPos;
+            _left.localRotation = _motion.LeftRot;
+            _left.localScale = _motion.LeftScale;
+            _right.localPosition = _motion.RightPos;
+            _right.localRotation = _motion.RightRot;
+            _right.localScale = _motion.RightScale;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Pot, stamp);
+            }
         }
 
-        // One turn around each handle, then up the wall, meeting on top of the line.
-        private static void Build(Mesh mesh, Vector3 rope, Vector3 ropeAxis, float lineRadius, float cordRadius, float wall)
+        internal static bool Wants(in Motion motion, float ropeRadius, float wall)
+        {
+            return !motion.Built
+                || Mathf.Abs(ropeRadius - motion.RopeRadius) > 1e-5f
+                || Mathf.Abs(wall - motion.Wall) > 1e-5f;
+        }
+
+        internal static void Step(
+            ref Motion motion, Vector3 rope, Vector3 axis, float ropeRadius, float wall,
+            Mesh body, Mesh left, Mesh right)
+        {
+            float cord = ropeRadius / 3f;
+            if (Wants(motion, ropeRadius, wall))
+            {
+                BuildBody(body, cord, wall);
+                BuildSpan(left, cord);
+                BuildSpan(right, cord);
+                motion.Built = true;
+                motion.RopeRadius = ropeRadius;
+                motion.Wall = wall;
+            }
+
+            Vector3 leftFrom;
+            Vector3 rightFrom;
+            Vector3 leftTo;
+            Vector3 rightTo;
+            Ends(rope, axis, ropeRadius, cord, wall, out leftFrom, out rightFrom, out leftTo, out rightTo);
+            Aim(ref motion.LeftPos, ref motion.LeftRot, ref motion.LeftScale, leftFrom, leftTo);
+            Aim(ref motion.RightPos, ref motion.RightRot, ref motion.RightScale, rightFrom, rightTo);
+        }
+
+        // Turns around the handles, and the straight rise from each turn up to the rim.
+        // Neither of those moves when the boat heels.
+        private static void BuildBody(Mesh mesh, float cordRadius, float wall)
         {
             bool big = wall > 0.18f;
             float wrapX = big ? BigWrapX : SmallWrapX;
             float loopR = (big ? BigWrapR : SmallWrapR) + cordRadius * 0.35f;
             Vector3 leftCenter = new Vector3(wrapX, JoinY, 0f);
             Vector3 rightCenter = new Vector3(-wrapX, JoinY, 0f);
-            Vector3[] leftLoop = Turn(leftCenter, loopR);
-            Vector3[] rightLoop = Turn(rightCenter, loopR);
-
-            float rise = RimY + 0.006f;
             Vector3 left = leftCenter + Vector3.up * loopR;
             Vector3 right = rightCenter + Vector3.up * loopR;
-            Vector3 leftRise = new Vector3(wall, rise, 0f);
-            Vector3 rightRise = new Vector3(-wall, rise, 0f);
+            float rise = RimY + 0.006f;
+            var paths = new List<Vector3[]>
+            {
+                Turn(leftCenter, loopR),
+                Turn(rightCenter, loopR),
+                Rise(left, new Vector3(wall, rise, 0f)),
+                Rise(right, new Vector3(-wall, rise, 0f)),
+            };
+            RopeMesh.Build(mesh, paths, cordRadius, Profile.Kind.Pot);
+        }
+
+        private static void BuildSpan(Mesh mesh, float cordRadius)
+        {
+            RopeMesh.Build(mesh, new[] { Vector3.zero, Vector3.forward }, cordRadius, Profile.Kind.Pot);
+        }
+
+        // Where each strand leaves the rim, and where it meets the rope.
+        private static void Ends(
+            Vector3 rope, Vector3 ropeAxis, float lineRadius, float cordRadius, float wall,
+            out Vector3 leftFrom, out Vector3 rightFrom, out Vector3 leftTo, out Vector3 rightTo)
+        {
+            float rise = RimY + 0.006f;
+            leftFrom = new Vector3(wall, rise, 0f);
+            rightFrom = new Vector3(-wall, rise, 0f);
 
             Vector3 center = new Vector3(0f, JoinY, 0f);
             Vector3 station = rope + ropeAxis * Vector3.Dot(center - rope, ropeAxis);
@@ -146,15 +224,22 @@ namespace Dizzy.Clothesline
             down.Normalize();
             Vector3 meet = station - down * (lineRadius + cordRadius * 0.5f);
             float split = cordRadius * 0.4f;
+            leftTo = meet - ropeAxis * split;
+            rightTo = meet + ropeAxis * split;
+        }
 
-            var paths = new List<Vector3[]>
+        private static void Aim(ref Vector3 pos, ref Quaternion rot, ref Vector3 scale, Vector3 from, Vector3 to)
+        {
+            Vector3 delta = to - from;
+            float length = delta.magnitude;
+            if (length < 1e-5f)
             {
-                leftLoop,
-                rightLoop,
-                Strand(left, leftRise, meet - ropeAxis * split),
-                Strand(right, rightRise, meet + ropeAxis * split),
-            };
-            RopeMesh.Build(mesh, paths, cordRadius);
+                scale = Vector3.zero;
+                return;
+            }
+            pos = from;
+            rot = CordTurn.Look(delta / length);
+            scale = new Vector3(1f, 1f, length);
         }
 
         // A closed turn in the plane of the wall, around the handle strap.
@@ -170,14 +255,31 @@ namespace Dizzy.Clothesline
             return loop;
         }
 
-        private static Vector3[] Strand(Vector3 fromLoop, Vector3 aboveRim, Vector3 meet)
+        private static Vector3[] Rise(Vector3 fromLoop, Vector3 aboveRim)
         {
-            var pts = new Vector3[8];
+            var pts = new Vector3[4];
             for (int i = 0; i < 4; i++)
                 pts[i] = Vector3.Lerp(fromLoop, aboveRim, i / 3f);
-            for (int i = 1; i <= 4; i++)
-                pts[3 + i] = Vector3.Lerp(aboveRim, meet, i / 4f);
             return pts;
+        }
+
+        private void Ensure(ref Transform child, ref Mesh mesh, string name)
+        {
+            if (child != null)
+                return;
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            var go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            mesh = new Mesh { name = name };
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshFilter filter = go.AddComponent<MeshFilter>();
+            filter.sharedMesh = mesh;
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshRenderer renderer = go.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = Cord();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            child = go.transform;
         }
 
         private static Material Cord()
@@ -197,6 +299,10 @@ namespace Dizzy.Clothesline
         {
             if (_mesh != null)
                 Destroy(_mesh);
+            if (_leftMesh != null)
+                Destroy(_leftMesh);
+            if (_rightMesh != null)
+                Destroy(_rightMesh);
         }
     }
 }

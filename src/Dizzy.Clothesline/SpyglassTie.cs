@@ -28,11 +28,17 @@ namespace Dizzy.Clothesline
         private static Material _cord;
 
         private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private float _ropeRadius;
-        private float _cupRadius;
-        private float _eyeZ;
+        private GlassMotion _glass;
+
+        internal struct GlassMotion
+        {
+            public bool Built;
+            public Vector3 Rope;
+            public Vector3 Axis;
+            public float RopeRadius;
+            public float CupRadius;
+            public float EyeZ;
+        }
 
         static SpyglassTie()
         {
@@ -44,7 +50,8 @@ namespace Dizzy.Clothesline
             }
             catch (System.Exception ex)
             {
-                Plugin.Log.LogWarning("Could not keep a hung spyglass off lamp hooks. " + ex.Message);
+                if (Plugin.Log != null)
+                    Plugin.Log.LogWarning("Could not keep a hung spyglass off lamp hooks. " + ex.Message);
             }
         }
 
@@ -135,6 +142,9 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
@@ -155,14 +165,11 @@ namespace Dizzy.Clothesline
             Vector3 rope = new Vector3(0f, 0f, eyeZ - gap);
             Vector3 axis = Vector3.right;
 
-            if (_mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f
-                && Mathf.Abs(cupRadius - _cupRadius) < 1e-5f
-                && Mathf.Abs(eyeZ - _eyeZ) < 1e-5f)
-                return;
-
+            // A third of the clothesline's radius: half was still half again too thick.
+            // The little glass's tube sticks out past the eye cup, so its loop is
+            // lifted by one clothesline thickness or the cord sits inside the tube.
+            float cordRadius = ropeRadius / 3f;
+            float lift = IsSmallest(ship) ? ropeRadius * 2f : 0f;
             if (_mesh == null)
             {
                 _mesh = new Mesh { name = "Clothesline Spyglass Tie" };
@@ -176,17 +183,34 @@ namespace Dizzy.Clothesline
                 renderer.receiveShadows = false;
             }
 
-            // A third of the clothesline's radius: half was still half again too thick.
-            // The little glass's tube sticks out past the eye cup, so its loop is
-            // lifted by one clothesline thickness or the cord sits inside the tube.
-            float cordRadius = ropeRadius / 3f;
-            float lift = IsSmallest(ship) ? ropeRadius * 2f : 0f;
-            Build(_mesh, rope, axis, ropeRadius, cordRadius, cupRadius, eyeZ, lift);
-            _rope = rope;
-            _axis = axis;
-            _ropeRadius = ropeRadius;
-            _cupRadius = cupRadius;
-            _eyeZ = eyeZ;
+            Step(ref _glass, rope, axis, ropeRadius, cordRadius, cupRadius, eyeZ, lift, _mesh);
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Glass, stamp);
+            }
+        }
+
+        // The cord is fixed in the glass. A heel does not move rope, axis, or the cup.
+        internal static void Step(
+            ref GlassMotion motion, Vector3 rope, Vector3 axis, float ropeRadius, float cordRadius,
+            float cupRadius, float eyeZ, float lift, Mesh mesh)
+        {
+            if (motion.Built
+                && (rope - motion.Rope).sqrMagnitude < 1e-8f
+                && (axis - motion.Axis).sqrMagnitude < 1e-8f
+                && Mathf.Abs(ropeRadius - motion.RopeRadius) < 1e-5f
+                && Mathf.Abs(cupRadius - motion.CupRadius) < 1e-5f
+                && Mathf.Abs(eyeZ - motion.EyeZ) < 1e-5f)
+                return;
+
+            Build(mesh, rope, axis, ropeRadius, cordRadius, cupRadius, eyeZ, lift);
+            motion.Built = true;
+            motion.Rope = rope;
+            motion.Axis = axis;
+            motion.RopeRadius = ropeRadius;
+            motion.CupRadius = cupRadius;
+            motion.EyeZ = eyeZ;
         }
 
         // One closed loop around the barrel, then two strands up the sides. They
@@ -239,7 +263,7 @@ namespace Dizzy.Clothesline
                 Strand(leftLoop, leftTop, leftCross, leftCross - side * tail),
                 Strand(rightLoop, rightTop, rightCross, rightCross + side * tail),
             };
-            RopeMesh.Build(mesh, paths, cordRadius);
+            RopeMesh.Build(mesh, paths, cordRadius, Profile.Kind.Glass);
         }
 
         private static bool IsSmallest(ShipItem ship)

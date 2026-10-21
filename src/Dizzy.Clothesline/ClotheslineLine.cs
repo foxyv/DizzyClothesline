@@ -122,93 +122,130 @@ namespace Dizzy.Clothesline
         private void BuildMesh()
         {
             float diameter = ClotheslineConfig.Thickness.Value;
-            float scale = RopeKnot.Scale(diameter, ArcLength());
-            _paths.Clear();
+            Compose(_paths, _points, _a, _b, _span, diameter, ClotheslineConfig.Sag.Value, HookUp(HookA), HookUp(HookB), out _knotReach);
+            RopeMesh.Build(_mesh, _paths, diameter * 0.5f, Profile.Kind.Line);
+        }
 
+        // Hooks that stay put in boat space do not rebuild. A heel of the boat is
+        // that case: the line turns with the boat, and its local ends do not move.
+        internal static void StepMesh(
+            ref bool built, ref Vector3 builtA, ref Vector3 builtB,
+            Vector3 a, Vector3 b, float thickness, float sag,
+            Vector3 hookUpA, Vector3 hookUpB,
+            Vector3[] points, List<Vector3[]> paths, Mesh mesh)
+        {
+            if (built
+                && (a - builtA).sqrMagnitude <= MoveTolerance * MoveTolerance
+                && (b - builtB).sqrMagnitude <= MoveTolerance * MoveTolerance)
+                return;
+
+            float span = Vector3.Distance(a, b);
+            Vector3 mid = (a + b) * 0.5f;
+            float knotReach;
+            Compose(paths, points, a - mid, b - mid, span, thickness, sag, hookUpA, hookUpB, out knotReach);
+            RopeMesh.Build(mesh, paths, thickness * 0.5f, Profile.Kind.Line);
+            built = true;
+            builtA = a;
+            builtB = b;
+        }
+
+        internal static void Compose(
+            List<Vector3[]> paths, Vector3[] points,
+            Vector3 a, Vector3 b, float span, float diameter, float sag,
+            Vector3 hookUpA, Vector3 hookUpB, out float knotReach)
+        {
+            Vector3 Point(float s)
+            {
+                return SagPoint(a, b, span, sag, s);
+            }
+
+            float Arc()
+            {
+                int steps = MeshSegments * 4;
+                float length = 0f;
+                Vector3 prev = Point(0f);
+                for (int i = 1; i <= steps; i++)
+                {
+                    Vector3 next = Point(i / (float)steps);
+                    length += Vector3.Distance(prev, next);
+                    prev = next;
+                }
+                return length;
+            }
+
+            Vector3 Along(float distance, bool fromEnd, out float s)
+            {
+                int steps = MeshSegments * 4;
+                float walked = 0f;
+                float sPrev = fromEnd ? 1f : 0f;
+                Vector3 prev = Point(sPrev);
+                for (int i = 1; i <= steps; i++)
+                {
+                    float sNext = fromEnd ? 1f - (float)i / steps : (float)i / steps;
+                    Vector3 next = Point(sNext);
+                    float step = Vector3.Distance(prev, next);
+                    if (step > 1e-6f && walked + step >= distance)
+                    {
+                        float u = (distance - walked) / step;
+                        s = Mathf.Lerp(sPrev, sNext, u);
+                        return Vector3.Lerp(prev, next, u);
+                    }
+
+                    walked += step;
+                    prev = next;
+                    sPrev = sNext;
+                }
+
+                s = fromEnd ? 0f : 1f;
+                return Point(s);
+            }
+
+            for (int i = 0; i <= MeshSegments; i++)
+                points[i] = Point((float)i / MeshSegments);
+
+            paths.Clear();
+            float scale = RopeKnot.Scale(diameter, Arc());
             if (scale <= 0f)
             {
-                _knotReach = 0f;
-                _paths.Add(_points);
+                knotReach = 0f;
+                paths.Add(points);
+                return;
             }
-            else
+
+            knotReach = RopeKnot.Reach(diameter, scale);
+            float trim = RopeKnot.Trim(diameter, scale);
+            float fromA;
+            float fromB;
+            Vector3 joinA = Along(trim, false, out fromA);
+            Vector3 joinB = Along(trim, true, out fromB);
+            if (fromB - fromA < 0.02f)
             {
-                _knotReach = RopeKnot.Reach(diameter, scale);
-                float trim = RopeKnot.Trim(diameter, scale);
-                float fromA;
-                float fromB;
-                Vector3 joinA = PointAlong(trim, false, out fromA);
-                Vector3 joinB = PointAlong(trim, true, out fromB);
-                if (fromB - fromA < 0.02f)
-                {
-                    _knotReach = 0f;
-                    _paths.Add(_points);
-                }
-                else
-                {
-                    var rope = new Vector3[MeshSegments + 1];
-                    for (int i = 0; i <= MeshSegments; i++)
-                        rope[i] = Point(Mathf.Lerp(fromA, fromB, i / (float)MeshSegments));
-                    rope[0] = joinA;
-                    rope[MeshSegments] = joinB;
-                    _paths.Add(rope);
-                    RopeKnot.Add(_paths, Point(0f), joinA, HookUp(HookA), diameter, scale);
-                    RopeKnot.Add(_paths, Point(1f), joinB, HookUp(HookB), diameter, scale);
-                }
+                knotReach = 0f;
+                paths.Add(points);
+                return;
             }
 
-            RopeMesh.Build(_mesh, _paths, diameter * 0.5f);
-        }
-
-        private float ArcLength()
-        {
-            int steps = MeshSegments * 4;
-            float length = 0f;
-            Vector3 prev = Point(0f);
-            for (int i = 1; i <= steps; i++)
-            {
-                Vector3 next = Point(i / (float)steps);
-                length += Vector3.Distance(prev, next);
-                prev = next;
-            }
-
-            return length;
-        }
-
-        // A point `distance` metres from one hook, following the sag. fromEnd walks
-        // back from HookB. s is the 0-at-HookA parameter of that point.
-        private Vector3 PointAlong(float distance, bool fromEnd, out float s)
-        {
-            int steps = MeshSegments * 4;
-            float walked = 0f;
-            float sPrev = fromEnd ? 1f : 0f;
-            Vector3 prev = Point(sPrev);
-            for (int i = 1; i <= steps; i++)
-            {
-                float sNext = fromEnd ? 1f - (float)i / steps : (float)i / steps;
-                Vector3 next = Point(sNext);
-                float step = Vector3.Distance(prev, next);
-                if (step > 1e-6f && walked + step >= distance)
-                {
-                    float u = (distance - walked) / step;
-                    s = Mathf.Lerp(sPrev, sNext, u);
-                    return Vector3.Lerp(prev, next, u);
-                }
-
-                walked += step;
-                prev = next;
-                sPrev = sNext;
-            }
-
-            s = fromEnd ? 0f : 1f;
-            return Point(s);
+            var rope = new Vector3[MeshSegments + 1];
+            for (int i = 0; i <= MeshSegments; i++)
+                rope[i] = Point(Mathf.Lerp(fromA, fromB, i / (float)MeshSegments));
+            rope[0] = joinA;
+            rope[MeshSegments] = joinB;
+            paths.Add(rope);
+            RopeKnot.Add(paths, Point(0f), joinA, hookUpA, diameter, scale);
+            RopeKnot.Add(paths, Point(1f), joinB, hookUpB, diameter, scale);
         }
 
         // Point on the rope, in this object's space. Sags along the boat's down, so it
         // heels with the boat like the hooks do.
         private Vector3 Point(float s)
         {
-            Vector3 p = Vector3.Lerp(_a, _b, s);
-            p.y -= _span * ClotheslineConfig.Sag.Value * 4f * s * (1f - s);
+            return SagPoint(_a, _b, _span, ClotheslineConfig.Sag.Value, s);
+        }
+
+        internal static Vector3 SagPoint(Vector3 a, Vector3 b, float span, float sag, float s)
+        {
+            Vector3 p = Vector3.Lerp(a, b, s);
+            p.y -= span * sag * 4f * s * (1f - s);
             return p;
         }
 
@@ -506,6 +543,9 @@ namespace Dizzy.Clothesline
 
         public override void ExtraLateUpdate()
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             if (Record == null)
                 return;
 
@@ -548,19 +588,42 @@ namespace Dizzy.Clothesline
                     anchor.Item.DisconnectJoint();
                 else
                 {
-                    StemTie.Sync(anchor);
-                    SpyglassTie.Sync(anchor);
-                    RackHook.Sync(anchor);
-                    LoopTie.Sync(anchor);
-                    HammerTie.Sync(anchor);
-                    PotTie.Sync(anchor);
-                    SausageKnot.Sync(anchor);
-                    BagKnot.Sync(anchor);
+                    SyncHangers(anchor);
                 }
             }
 
             unclickable = Lines.HeldBlocksLines;
             lookText = Lines.LookTextFor(Record);
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Late, stamp);
+            }
+        }
+
+        private static void SyncHangers(LineAnchor anchor)
+        {
+            if (!ClotheslineConfig.DrawHangers)
+            {
+                StemTie.Clear(anchor);
+                SpyglassTie.Clear(anchor);
+                RackHook.Clear(anchor);
+                LoopTie.Clear(anchor);
+                HammerTie.Clear(anchor);
+                PotTie.Clear(anchor);
+                SausageKnot.Clear(anchor);
+                BagKnot.Clear(anchor);
+                return;
+            }
+
+            StemTie.Sync(anchor);
+            SpyglassTie.Sync(anchor);
+            RackHook.Sync(anchor);
+            LoopTie.Sync(anchor);
+            HammerTie.Sync(anchor);
+            PotTie.Sync(anchor);
+            SausageKnot.Sync(anchor);
+            BagKnot.Sync(anchor);
         }
 
         private static bool Moved(Transform hook, Vector3 position, Quaternion rotation)

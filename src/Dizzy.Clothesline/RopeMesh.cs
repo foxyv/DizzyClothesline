@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace Dizzy.Clothesline
@@ -44,13 +45,18 @@ namespace Dizzy.Clothesline
                 _material.color = ClotheslineConfig.RopeColor.Value;
         }
 
-        internal static void Build(Mesh mesh, Vector3[] points, float radius)
+        internal static void Build(Mesh mesh, Vector3[] points, float radius, Profile.Kind kind)
         {
-            Build(mesh, new[] { points }, radius);
+            Build(mesh, new[] { points }, radius, kind);
         }
 
-        internal static void Build(Mesh mesh, IList<Vector3[]> paths, float radius)
+        // Kept unoptimized so a test host can run it. Inlining Unity's tiny math
+        // wrappers pulls their native calls into this assembly, and the runtime
+        // rejects that outside the player.
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        internal static void Build(Mesh mesh, IList<Vector3[]> paths, float radius, Profile.Kind kind)
         {
+            Profile.Built(kind);
             int ringSize = Sides + 1;
             int verts = 0;
             int tris = 0;
@@ -63,9 +69,12 @@ namespace Dizzy.Clothesline
                 tris += (path.Length - 1) * Sides * 6;
             }
 
-            mesh.Clear();
             if (verts == 0)
+            {
+                if (!object.ReferenceEquals(mesh, null))
+                    mesh.Clear();
                 return;
+            }
 
             var vertices = new Vector3[verts];
             var normals = new Vector3[verts];
@@ -99,6 +108,12 @@ namespace Dizzy.Clothesline
                 }
             }
 
+            // A timing run builds the same tubes without a Unity mesh to upload into.
+            // ReferenceEquals, because Mesh's own null check is a native call.
+            if (object.ReferenceEquals(mesh, null))
+                return;
+
+            mesh.Clear();
             mesh.vertices = vertices;
             mesh.normals = normals;
             mesh.uv = uv;
@@ -108,6 +123,7 @@ namespace Dizzy.Clothesline
 
         // The frame is carried along the centerline. Rebuilding it from world up at
         // every ring flips the tube where a knot curls back on itself.
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
         private static void WritePath(
             Vector3[] points, float radius,
             Vector3[] vertices, Vector3[] normals, Vector2[] uv, int[] triangles,

@@ -3,13 +3,16 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>Dizzy.Clothesline</AssemblyName>
     <Product>Dizzy Clothesline</Product>
-    <Version>0.3.12</Version>
+    <Version>0.3.21</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <SailwindDir Condition="'$(SailwindDir)' == ''">D:\SteamLibrary\steamapps\common\Sailwind</SailwindDir>
     <ManagedDir>$(SailwindDir)\Sailwind_Data\Managed</ManagedDir>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dizzy.Clothesline.Tests" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
     <PackageReference Include="BepInEx.Core" Version="5.4.21" />

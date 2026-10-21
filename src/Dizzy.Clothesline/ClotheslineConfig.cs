@@ -12,6 +12,8 @@ namespace Dizzy.Clothesline
         internal static ConfigEntry<Color> RopeColor;
         internal static ConfigEntry<float> ItemSpacing;
         internal static ConfigEntry<float> HangDrop;
+        internal static ConfigEntry<bool> Hangers;
+        internal static ConfigEntry<bool> Metrics;
 
         internal static void Bind(ConfigFile config)
         {
@@ -36,11 +38,21 @@ namespace Dizzy.Clothesline
             HangDrop = config.Bind("Hanging", "Hang Drop", 0.02f, new ConfigDescription(
                 "How far below the rope an item hangs, in metres. Raise it if items sink into the rope.",
                 new AcceptableValueRange<float>(-0.2f, 0.3f)));
+            Hangers = config.Bind("Hanging", "Hangers", true,
+                "Draw the small cords, rings, and knots that join a hung item to the rope. Turn this off and the items still hang, with nothing extra between them and the line.");
+
+            Metrics = config.Bind("Metrics", "Enabled", false,
+                "Record hanger and frame timings. Once a minute, write the mean, median, p90, and p99 to the log and the screen. Leave this off to skip recording and hide that readout.");
 
             Sag.SettingChanged += (s, e) => Lines.RebuildAll();
             Thickness.SettingChanged += (s, e) => Lines.RebuildAll();
             HangDrop.SettingChanged += (s, e) => Lines.RebuildAll();
             RopeColor.SettingChanged += (s, e) => RopeMesh.ApplyColor();
+        }
+
+        internal static bool DrawHangers
+        {
+            get { return Hangers == null || Hangers.Value; }
         }
 
         internal static string TieKeyLabel

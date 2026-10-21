@@ -6,6 +6,10 @@ namespace Dizzy.Clothesline
     // A thinner string that hangs a banana bunch from the line. The bunch's stalk
     // stops at the pin, and a lamp hook's metal covers that gap. On a line the string
     // wraps the stalk, then loops over the rope.
+    //
+    // The wrap, the loop, and the strand between them are built once. A roll of the
+    // boat turns the wrap on the stalk and the loop onto the rope. Rebuilding the
+    // whole string for that shift was the hitch.
     internal sealed class StemTie : MonoBehaviour
     {
         private const string StickName = "FirewoodBundleStick";
@@ -13,11 +17,31 @@ namespace Dizzy.Clothesline
         private const int WrapTurns = 2;
         private const int PerTurn = 12;
 
-        private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private float _ropeRadius;
-        private float _stringRadius;
+        private Transform _wrap;
+        private Transform _loop;
+        private Transform _span;
+        private Mesh _wrapMesh;
+        private Mesh _loopMesh;
+        private Mesh _spanMesh;
+        private Motion _motion;
+
+        // The three pieces, aimed. Built is false until the tubes exist.
+        internal struct Motion
+        {
+            public bool Built;
+            public float RopeRadius;
+            public float StringRadius;
+            public float StalkRadius;
+            public Vector3 WrapEnd;
+            public Vector3 LoopStart;
+            public Vector3 WrapPos;
+            public Quaternion WrapRot;
+            public Vector3 LoopPos;
+            public Quaternion LoopRot;
+            public Vector3 SpanPos;
+            public Quaternion SpanRot;
+            public Vector3 SpanScale;
+        }
 
         internal static void Sync(LineAnchor anchor)
         {
@@ -56,50 +80,113 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor)
         {
-            ClotheslineLine line = anchor.Line;
-            ShipItem ship = anchor.Ship;
-            if (line == null || ship == null || anchor.Record == null)
-                return;
-
-            float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
-            float stringRadius = ropeRadius * 0.5f;
-            Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
-            Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-            if (axis.sqrMagnitude < 1e-8f)
-                return;
-            axis.Normalize();
-
-            if (_mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && Mathf.Abs(ropeRadius - _ropeRadius) < 1e-5f
-                && Mathf.Abs(stringRadius - _stringRadius) < 1e-5f)
-                return;
-
-            Vector3 top;
-            Vector3 down;
-            float stalkRadius;
-            if (!TryStalk(ship, rope, out top, out down, out stalkRadius))
-                return;
-
-            if (_mesh == null)
+            long stamp = Profile.Stamp();
+            try
             {
-                _mesh = new Mesh { name = "Clothesline Stem Tie" };
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshFilter filter = gameObject.AddComponent<MeshFilter>();
-                filter.sharedMesh = _mesh;
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
-                renderer.sharedMaterial = RopeMesh.Material;
-                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
+                ClotheslineLine line = anchor.Line;
+                ShipItem ship = anchor.Ship;
+                if (line == null || ship == null || anchor.Record == null)
+                    return;
+
+                transform.localPosition = Vector3.zero;
+                transform.localRotation = Quaternion.identity;
+                transform.localScale = Vector3.one;
+
+                float ropeRadius = ClotheslineConfig.Thickness.Value * 0.5f;
+                float stringRadius = ropeRadius * 0.5f;
+                Vector3 rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
+                Vector3 axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
+                if (axis.sqrMagnitude < 1e-8f || !Finite(rope) || !Finite(axis))
+                    return;
+                axis.Normalize();
+
+                Vector3 top;
+                Vector3 down;
+                float stalkRadius;
+                if (!TryStalk(ship, rope, out top, out down, out stalkRadius))
+                    return;
+
+                if (Wants(_motion, ropeRadius, stringRadius, stalkRadius))
+                {
+                    Ensure(ref _wrap, ref _wrapMesh, "clothesline stem wrap");
+                    Ensure(ref _loop, ref _loopMesh, "clothesline stem loop");
+                    Ensure(ref _span, ref _spanMesh, "clothesline stem span");
+                }
+
+                Step(ref _motion, rope, axis, top, down, stalkRadius, ropeRadius, _wrapMesh, _loopMesh, _spanMesh);
+                if (_wrap == null || !_motion.Built)
+                    return;
+
+                _wrap.localPosition = _motion.WrapPos;
+                _wrap.localRotation = _motion.WrapRot;
+                _wrap.localScale = Vector3.one;
+                _loop.localPosition = _motion.LoopPos;
+                _loop.localRotation = _motion.LoopRot;
+                _loop.localScale = Vector3.one;
+                _span.localPosition = _motion.SpanPos;
+                _span.localRotation = _motion.SpanRot;
+                _span.localScale = _motion.SpanScale;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Stem, stamp);
+            }
+        }
+
+        internal static bool Wants(in Motion motion, float ropeRadius, float stringRadius, float stalkRadius)
+        {
+            return !motion.Built
+                || Mathf.Abs(ropeRadius - motion.RopeRadius) > 1e-5f
+                || Mathf.Abs(stringRadius - motion.StringRadius) > 1e-5f
+                || Mathf.Abs(stalkRadius - motion.StalkRadius) > 1e-5f;
+        }
+
+        // rope and axis are already in the bunch's space. A heel changes them.
+        // The tubes are rebuilt only when a radius changes.
+        internal static void Step(
+            ref Motion motion, Vector3 rope, Vector3 axis, Vector3 top, Vector3 down,
+            float stalkRadius, float ropeRadius, Mesh wrap, Mesh loop, Mesh span)
+        {
+            float stringRadius = ropeRadius * 0.5f;
+            Vector3 origin = top + down * stalkRadius;
+            Vector3 towardRope = rope - origin;
+            Vector3 side = towardRope - down * Vector3.Dot(towardRope, down);
+            if (side.sqrMagnitude < 1e-8f)
+                side = Vector3.Cross(down, Vector3.right);
+            if (side.sqrMagnitude < 1e-8f)
+                side = Vector3.Cross(down, Vector3.forward);
+            side.Normalize();
+
+            if (Wants(motion, ropeRadius, stringRadius, stalkRadius))
+            {
+                motion.WrapEnd = BuildWrap(wrap, stringRadius, stalkRadius);
+                motion.LoopStart = BuildLoop(loop, ropeRadius, stringRadius);
+                BuildSpan(span, stringRadius);
+                motion.RopeRadius = ropeRadius;
+                motion.StringRadius = stringRadius;
+                motion.StalkRadius = stalkRadius;
+                motion.Built = true;
             }
 
-            Build(_mesh, rope, axis, ropeRadius, stringRadius, top, down, stalkRadius);
-            _rope = rope;
-            _axis = axis;
-            _ropeRadius = ropeRadius;
-            _stringRadius = stringRadius;
+            motion.WrapPos = origin;
+            motion.WrapRot = CordTurn.Look(side, down);
+
+            Vector3 toStem = origin - rope;
+            Vector3 towardStem = toStem - axis * Vector3.Dot(toStem, axis);
+            if (towardStem.sqrMagnitude < 1e-8f)
+                towardStem = Vector3.Cross(axis, Vector3.up);
+            if (towardStem.sqrMagnitude < 1e-8f)
+                towardStem = Vector3.Cross(axis, Vector3.right);
+            towardStem.Normalize();
+            Vector3 flank = Vector3.Cross(axis, towardStem);
+            if (flank.sqrMagnitude < 1e-8f)
+                return;
+
+            motion.LoopPos = rope;
+            motion.LoopRot = CordTurn.Look(flank.normalized, towardStem);
+            Vector3 from = motion.WrapPos + motion.WrapRot * motion.WrapEnd;
+            Vector3 to = motion.LoopPos + motion.LoopRot * motion.LoopStart;
+            AimSpan(ref motion.SpanPos, ref motion.SpanRot, ref motion.SpanScale, from, to);
         }
 
         // The bunch's own capsule is the stalk. Its end nearer the rope is the stem.
@@ -125,22 +212,14 @@ namespace Dizzy.Clothesline
             return true;
         }
 
-        private static void Build(
-            Mesh mesh, Vector3 rope, Vector3 ropeAxis, float ropeRadius, float stringRadius,
-            Vector3 stemTop, Vector3 down, float stalkRadius)
+        // Spiral in wrap-local space. Local Y runs down the stalk, local Z faces the rope.
+        private static Vector3 BuildWrap(Mesh mesh, float stringRadius, float stalkRadius)
         {
-            // On the full part of the stalk, just under the tip that meets the pin.
-            Vector3 origin = stemTop + down * stalkRadius;
+            Vector3 down = Vector3.up;
+            Vector3 side = Vector3.forward;
+            Vector3 bend = Vector3.Cross(down, side);
             float wrapRadius = stalkRadius + stringRadius * 0.35f;
             float pitch = stringRadius * 2f * 1.15f;
-            Vector3 towardRope = rope - origin;
-            Vector3 side = towardRope - down * Vector3.Dot(towardRope, down);
-            if (side.sqrMagnitude < 1e-8f)
-                side = Vector3.Cross(down, Vector3.right);
-            if (side.sqrMagnitude < 1e-8f)
-                side = Vector3.Cross(down, Vector3.forward);
-            side.Normalize();
-            Vector3 bend = Vector3.Cross(down, side);
 
             int segs = WrapTurns * PerTurn;
             var wraps = new Vector3[segs + 1];
@@ -156,19 +235,20 @@ namespace Dizzy.Clothesline
                     radial = Mathf.Lerp(stalkRadius * 0.15f, wrapRadius, k);
                 }
 
-                wraps[i] = origin + down * (u * pitch * WrapTurns)
+                wraps[i] = down * (u * pitch * WrapTurns)
                     + (side * Mathf.Cos(ang) + bend * Mathf.Sin(ang)) * radial;
             }
 
-            // A turn around the rope. Angle 0 faces the stem, so the far side is over the line.
+            RopeMesh.Build(mesh, wraps, stringRadius, Profile.Kind.Stem);
+            return wraps[wraps.Length - 1];
+        }
+
+        // A ring in loop-local space. Local X is the rope, local Y faces the stalk.
+        private static Vector3 BuildLoop(Mesh mesh, float ropeRadius, float stringRadius)
+        {
             float loopRadius = ropeRadius + stringRadius * 0.25f;
-            Vector3 toStem = origin - rope;
-            Vector3 towardStem = toStem - ropeAxis * Vector3.Dot(toStem, ropeAxis);
-            if (towardStem.sqrMagnitude < 1e-8f)
-                towardStem = Vector3.Cross(ropeAxis, Vector3.up);
-            if (towardStem.sqrMagnitude < 1e-8f)
-                towardStem = Vector3.Cross(ropeAxis, Vector3.right);
-            towardStem.Normalize();
+            Vector3 towardStem = Vector3.up;
+            Vector3 ropeAxis = Vector3.right;
             Vector3 loopSide = Vector3.Cross(ropeAxis, towardStem).normalized;
 
             const int loopSegs = 20;
@@ -176,23 +256,66 @@ namespace Dizzy.Clothesline
             for (int i = 0; i <= loopSegs; i++)
             {
                 float ang = i * Mathf.PI * 2f / loopSegs;
-                loop[i] = rope + (towardStem * Mathf.Cos(ang) + loopSide * Mathf.Sin(ang)) * loopRadius;
+                loop[i] = (towardStem * Mathf.Cos(ang) + loopSide * Mathf.Sin(ang)) * loopRadius;
             }
 
-            Vector3 from = wraps[wraps.Length - 1];
-            Vector3 to = loop[0];
-            var bridge = new Vector3[4];
-            for (int i = 0; i < 4; i++)
-                bridge[i] = Vector3.Lerp(from, to, i / 3f);
+            RopeMesh.Build(mesh, loop, stringRadius, Profile.Kind.Stem);
+            return loop[0];
+        }
 
-            var paths = new List<Vector3[]> { wraps, bridge, loop };
-            RopeMesh.Build(mesh, paths, stringRadius);
+        private static void BuildSpan(Mesh mesh, float stringRadius)
+        {
+            RopeMesh.Build(mesh, new[] { Vector3.zero, Vector3.forward }, stringRadius, Profile.Kind.Stem);
+        }
+
+        // The span mesh is one unit long on local Z. Scaling that axis meets the loop.
+        private static void AimSpan(ref Vector3 pos, ref Quaternion rot, ref Vector3 scale, Vector3 from, Vector3 to)
+        {
+            Vector3 delta = to - from;
+            float length = delta.magnitude;
+            if (length < 1e-5f)
+            {
+                scale = Vector3.zero;
+                return;
+            }
+            pos = from;
+            rot = CordTurn.Look(delta / length);
+            scale = new Vector3(1f, 1f, length);
+        }
+
+        private void Ensure(ref Transform child, ref Mesh mesh, string name)
+        {
+            if (child != null)
+                return;
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            var go = new GameObject(name);
+            go.transform.SetParent(transform, false);
+            mesh = new Mesh { name = name };
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshFilter filter = go.AddComponent<MeshFilter>();
+            filter.sharedMesh = mesh;
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshRenderer renderer = go.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = RopeMesh.Material;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            child = go.transform;
+        }
+
+        private static bool Finite(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsNaN(value.y) && !float.IsNaN(value.z)
+                && !float.IsInfinity(value.x) && !float.IsInfinity(value.y) && !float.IsInfinity(value.z);
         }
 
         private void OnDestroy()
         {
-            if (_mesh != null)
-                Destroy(_mesh);
+            if (_wrapMesh != null)
+                Destroy(_wrapMesh);
+            if (_loopMesh != null)
+                Destroy(_loopMesh);
+            if (_spanMesh != null)
+                Destroy(_spanMesh);
         }
     }
 }

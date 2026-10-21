@@ -11,7 +11,40 @@ namespace Dizzy.Clothesline
         internal const float CordRadius = 0.003f;
         private const float AroundGap = 0.002f;
 
-        internal static bool Build(Mesh mesh, Vector3 along, float drop, float ropeRadius, out Vector3 open)
+        // Built once, opening along local X. The knot object turns so that X lies
+        // across the rope. Rebuilding for a heel was the bag and sausage hitch.
+        internal struct Aim
+        {
+            public bool Built;
+            public float Drop;
+            public float RopeRadius;
+            public Quaternion Rotation;
+        }
+
+        internal static bool Step(ref Aim aim, Vector3 along, float drop, float ropeRadius, Mesh mesh, Profile.Kind kind)
+        {
+            along.y = 0f;
+            if (along.sqrMagnitude < 1e-8f)
+                along = Vector3.right;
+            else
+                along.Normalize();
+
+            if (!aim.Built
+                || Mathf.Abs(drop - aim.Drop) > 1e-5f
+                || Mathf.Abs(ropeRadius - aim.RopeRadius) > 1e-5f)
+            {
+                if (!Build(mesh, Vector3.right, drop, ropeRadius, kind, out _))
+                    return false;
+                aim.Built = true;
+                aim.Drop = drop;
+                aim.RopeRadius = ropeRadius;
+            }
+
+            aim.Rotation = CordTurn.FromTo(Vector3.right, along);
+            return true;
+        }
+
+        internal static bool Build(Mesh mesh, Vector3 along, float drop, float ropeRadius, Profile.Kind kind, out Vector3 open)
         {
             open = Vector3.Cross(Vector3.up, along);
             if (open.sqrMagnitude < 1e-8f)
@@ -20,7 +53,7 @@ namespace Dizzy.Clothesline
 
             float diameter = CordRadius * 2f;
             float natural = RopeKnot.Trim(diameter, 1f);
-            if (mesh == null || drop < diameter || natural < 1e-4f)
+            if (drop < diameter || natural < 1e-4f)
                 return false;
             float scale = Mathf.Min(1f, drop / natural);
             float trim = RopeKnot.Trim(diameter, scale);
@@ -30,7 +63,7 @@ namespace Dizzy.Clothesline
             if (paths.Count == 0)
                 return false;
             ClearOfRope(paths[0], Vector3.up * drop, along, ropeRadius + CordRadius + AroundGap);
-            RopeMesh.Build(mesh, paths, CordRadius);
+            RopeMesh.Build(mesh, paths, CordRadius, kind);
             return true;
         }
 

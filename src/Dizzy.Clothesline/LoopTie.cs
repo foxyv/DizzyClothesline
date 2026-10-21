@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace Dizzy.Clothesline
@@ -23,11 +24,33 @@ namespace Dizzy.Clothesline
         private const float CheckInterval = 1f;
 
         private Mesh _mesh;
-        private Vector3 _rope;
-        private Vector3 _axis;
-        private Vector3 _passage;
-        private float _lineRadius;
-        private float _nextCheck;
+        private HandleMotion _handle;
+        private RingMotion _ring;
+
+        // A handle ring, built once for a gap of this length. A roll of the boat
+        // turns it onto the rope instead of rebuilding the mesh.
+        internal struct HandleMotion
+        {
+            public bool Built;
+            public float Length;
+            public float LineRadius;
+            public float Metal;
+            public float Wire;
+            public bool Place;
+            public Vector3 Position;
+            public Quaternion Rotation;
+        }
+
+        // The hammer's ring is a fixed cord. It is redrawn on the one-second check.
+        internal struct RingMotion
+        {
+            public bool Built;
+            public Vector3 Rope;
+            public Vector3 Axis;
+            public Vector3 Passage;
+            public float LineRadius;
+            public float NextCheck;
+        }
 
         internal static void Sync(LineAnchor anchor)
         {
@@ -151,75 +174,155 @@ namespace Dizzy.Clothesline
 
         private void Follow(LineAnchor anchor, Vector3 passage, float metal, float wire)
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             ClotheslineLine line = anchor.Line;
             ShipItem ship = anchor.Ship;
             if (line == null || ship == null || anchor.Record == null)
                 return;
 
             float lineRadius = ClotheslineConfig.Thickness.Value * 0.5f;
-            Vector3 rope;
-            Vector3 axis;
-            Vector3 upHint = Vector3.zero;
+            // A bad sample must not leave the cord scaled up from an earlier frame.
+            transform.localScale = Vector3.one;
+
             // A hammer's ring is a fixed cord on the eye, the way a bundle's string
             // is fixed on the bunch. It stands up the shaft. Measuring the live gap
             // rebuilt it at a new size whenever a load moved the rope.
             if (HammerTie.Is(ship))
             {
                 float gap = ClotheslineConfig.HangDrop.Value + HammerTie.Drop(ship);
-                // Local Z is the shaft, up toward the head. The eye is in the YZ
-                // plane, so the bar through it runs on local X and the rope, when
-                // the boat is level, lies on local Y.
-                rope = passage + Vector3.forward * gap;
-                axis = Vector3.up;
-                upHint = Vector3.forward;
+                if (_mesh == null)
+                    EnsureMesh();
+                StepHammer(ref _ring, passage, gap, lineRadius, metal, wire, Time.time, _mesh);
+                return;
             }
-            else
-            {
-                rope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
-                axis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
-                if (axis.sqrMagnitude < 1e-8f)
-                    return;
-                axis.Normalize();
-            }
-            // A bad sample must not leave the cord scaled up from an earlier frame.
-            transform.localScale = Vector3.one;
 
-            bool check = Time.time >= _nextCheck;
+            // The handle stays put on the item and the rope moves as the boat heels.
+            // Rebuilding the cord for that shift was hundreds of meshes a second.
+            // The mesh is the ring for this gap, stood on local Y. Turning the object
+            // lays that Y along the handle-to-rope direction.
+            Vector3 liveRope = ship.transform.InverseTransformPoint(line.RopeWorld(anchor.Record.S));
+            Vector3 liveAxis = ship.transform.InverseTransformDirection(line.RopeDirectionWorld(anchor.Record.S));
+            if (_mesh == null && !_handle.Built)
+                EnsureMesh();
+            StepHandle(ref _handle, passage, liveRope, liveAxis, lineRadius, metal, wire, _mesh);
+            if (!_handle.Place)
+                return;
+            transform.localPosition = _handle.Position;
+            transform.localRotation = _handle.Rotation;
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Loop, stamp);
+            }
+        }
+
+        internal static void StepHammer(
+            ref RingMotion motion, Vector3 passage, float gap, float lineRadius,
+            float metal, float wire, float time, Mesh mesh)
+        {
+            // Local Z is the shaft, up toward the head. The eye is in the YZ plane,
+            // so the bar through it runs on local X and the rope, when the boat is
+            // level, lies on local Y.
+            Vector3 rope = passage + Vector3.forward * gap;
+            Vector3 axis = Vector3.up;
+            bool check = time >= motion.NextCheck;
             if (!check
-                && _mesh != null
-                && (rope - _rope).sqrMagnitude < 1e-8f
-                && (axis - _axis).sqrMagnitude < 1e-8f
-                && (passage - _passage).sqrMagnitude < 1e-8f
-                && Mathf.Abs(lineRadius - _lineRadius) < 1e-5f)
+                && motion.Built
+                && (rope - motion.Rope).sqrMagnitude < 1e-8f
+                && (axis - motion.Axis).sqrMagnitude < 1e-8f
+                && (passage - motion.Passage).sqrMagnitude < 1e-8f
+                && Mathf.Abs(lineRadius - motion.LineRadius) < 1e-5f)
                 return;
 
-            if (_mesh == null)
+            Build(mesh, rope, axis, passage, lineRadius, lineRadius / 3f, metal, wire, check, motion.Built, Vector3.forward);
+            if (check)
+                motion.NextCheck = time + CheckInterval;
+            motion.Rope = rope;
+            motion.Axis = axis;
+            motion.Passage = passage;
+            motion.LineRadius = lineRadius;
+            motion.Built = true;
+        }
+
+        internal static void StepHandle(
+            ref HandleMotion motion, Vector3 passage, Vector3 liveRope, Vector3 liveAxis,
+            float lineRadius, float metal, float wire, Mesh mesh)
+        {
+            Vector3 rel = passage - liveRope;
+            bool bad = liveAxis.sqrMagnitude < 1e-8f
+                || !Finite(rel) || !Finite(liveRope) || !Finite(liveAxis) || !Finite(passage)
+                || rel.sqrMagnitude > 0.2f * 0.2f;
+            if (bad)
             {
-                _mesh = new Mesh { name = "Clothesline Loop Tie" };
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshFilter filter = gameObject.AddComponent<MeshFilter>();
-                filter.sharedMesh = _mesh;
-                // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
-                MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
-                renderer.sharedMaterial = Cord();
-                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
+                if (motion.Built)
+                    return;
+                rel = Vector3.up * 0.03f;
+                liveAxis = Vector3.right;
             }
 
-            Build(_mesh, rope, axis, passage, lineRadius, lineRadius / 3f, metal, wire, check, upHint);
-            if (check)
-                _nextCheck = Time.time + CheckInterval;
-            _rope = rope;
-            _axis = axis;
-            _passage = passage;
-            _lineRadius = lineRadius;
+            float length = rel.magnitude;
+            if (length < 1e-4f)
+            {
+                if (motion.Built)
+                    return;
+                rel = Vector3.up * 0.03f;
+                length = 0.03f;
+                liveAxis = Vector3.right;
+            }
+
+            if (!motion.Built
+                || Mathf.Abs(length - motion.Length) > 0.01f
+                || Mathf.Abs(lineRadius - motion.LineRadius) > 1e-4f
+                || Mathf.Abs(metal - motion.Metal) > 1e-5f
+                || Mathf.Abs(wire - motion.Wire) > 1e-5f)
+            {
+                Build(mesh, -Vector3.up * length, Vector3.right, Vector3.zero, lineRadius, lineRadius / 3f, metal, wire, true, motion.Built, Vector3.up);
+                motion.Built = true;
+                motion.Length = length;
+                motion.LineRadius = lineRadius;
+                motion.Metal = metal;
+                motion.Wire = wire;
+            }
+
+            Vector3 relDir = rel / length;
+            Vector3 axisDir = liveAxis.normalized;
+            axisDir -= relDir * Vector3.Dot(axisDir, relDir);
+            if (axisDir.sqrMagnitude < 1e-8f)
+                axisDir = Vector3.Cross(relDir, Vector3.right);
+            if (axisDir.sqrMagnitude < 1e-8f)
+                axisDir = Vector3.Cross(relDir, Vector3.forward);
+            axisDir.Normalize();
+            Vector3 flank = Vector3.Cross(axisDir, relDir);
+            if (flank.sqrMagnitude < 1e-8f)
+                return;
+
+            motion.Place = true;
+            motion.Position = passage;
+            motion.Rotation = CordTurn.Look(flank.normalized, relDir);
+        }
+
+        private void EnsureMesh()
+        {
+            if (_mesh != null)
+                return;
+            _mesh = new Mesh { name = "Clothesline Loop Tie" };
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshFilter filter = gameObject.AddComponent<MeshFilter>();
+            filter.sharedMesh = _mesh;
+            // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
+            MeshRenderer renderer = gameObject.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = Cord();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
         }
 
         // A loop standing up over the rope. The bottom bites a little into the handle
         // and the crown bites the same fraction into the clothesline.
         private static void Build(
             Mesh mesh, Vector3 rope, Vector3 ropeAxis, Vector3 passage,
-            float lineRadius, float cordRadius, float metalHalf, float wire, bool fix, Vector3 upHint)
+            float lineRadius, float cordRadius, float metalHalf, float wire, bool fix, bool drawn, Vector3 upHint)
         {
             Vector3 upSource = upHint.sqrMagnitude > 1e-8f ? upHint : Vector3.up;
             Vector3 up = upSource - ropeAxis * Vector3.Dot(upSource, ropeAxis);
@@ -239,7 +342,8 @@ namespace Dizzy.Clothesline
             Vector3 rel = passage - rope;
             if (!Finite(rel) || !Finite(rope) || rel.sqrMagnitude > maxReach * maxReach)
             {
-                if (mesh.vertexCount > 0 && !fix)
+                // drawn is the previous ring. vertexCount would ask the player.
+                if (drawn && !fix)
                     return;
                 rel = up * 0.03f;
                 rope = passage - rel;
@@ -299,7 +403,7 @@ namespace Dizzy.Clothesline
                 path.Add(rope + flank * (passU - side) + up * v);
             }
 
-            RopeMesh.Build(mesh, new List<Vector3[]> { path.ToArray() }, cordRadius);
+            RopeMesh.Build(mesh, new List<Vector3[]> { path.ToArray() }, cordRadius, Profile.Kind.Loop);
         }
 
         // The same dark brown as the spyglass cord.

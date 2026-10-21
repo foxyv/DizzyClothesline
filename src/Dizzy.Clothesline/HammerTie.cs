@@ -43,7 +43,13 @@ namespace Dizzy.Clothesline
         private static Material _cord;
 
         private Mesh _mesh;
-        private float _cordRadius;
+        private EyeMotion _eye;
+
+        internal struct EyeMotion
+        {
+            public bool Built;
+            public float CordRadius;
+        }
 
         static HammerTie()
         {
@@ -55,7 +61,8 @@ namespace Dizzy.Clothesline
             }
             catch (System.Exception ex)
             {
-                Plugin.Log.LogWarning("Could not keep a hung hammer off lamp hooks. " + ex.Message);
+                if (Plugin.Log != null)
+                    Plugin.Log.LogWarning("Could not keep a hung hammer off lamp hooks. " + ex.Message);
             }
         }
 
@@ -135,13 +142,11 @@ namespace Dizzy.Clothesline
         // it is built once. Only a change of cord thickness draws it again.
         private void Follow()
         {
+            long stamp = Profile.Stamp();
+            try
+            {
             float cordRadius = CordRadius;
-            if (cordRadius < 1e-5f)
-                return;
-            if (_mesh != null && Mathf.Abs(cordRadius - _cordRadius) < 1e-5f)
-                return;
-
-            if (_mesh == null)
+            if (_mesh == null && cordRadius >= 1e-5f)
             {
                 _mesh = new Mesh { name = "Clothesline Hammer Tie" };
                 // modcheck-ignore: SW605 fresh tie object, there is nothing to reuse
@@ -154,8 +159,25 @@ namespace Dizzy.Clothesline
                 renderer.receiveShadows = false;
             }
 
-            Build(_mesh, cordRadius);
-            _cordRadius = cordRadius;
+            Step(ref _eye, cordRadius, _mesh);
+            }
+            finally
+            {
+                Profile.Add(Profile.Kind.Hammer, stamp);
+            }
+        }
+
+        // The eye is fixed on the hammer. Only a change of cord thickness draws it again.
+        internal static void Step(ref EyeMotion motion, float cordRadius, Mesh mesh)
+        {
+            if (cordRadius < 1e-5f)
+                return;
+            if (motion.Built && Mathf.Abs(cordRadius - motion.CordRadius) < 1e-5f)
+                return;
+
+            Build(mesh, cordRadius);
+            motion.Built = true;
+            motion.CordRadius = cordRadius;
         }
 
         // One closed loop in the YZ plane, centered on the crown. The hole is
@@ -172,7 +194,7 @@ namespace Dizzy.Clothesline
                 loop[i] = center + (Vector3.up * Mathf.Cos(ang) + Vector3.forward * Mathf.Sin(ang)) * loopR;
             }
 
-            RopeMesh.Build(mesh, new List<Vector3[]> { loop }, cordRadius);
+            RopeMesh.Build(mesh, new List<Vector3[]> { loop }, cordRadius, Profile.Kind.Hammer);
         }
 
         private static Material Cord()

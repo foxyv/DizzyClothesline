@@ -44,9 +44,20 @@ namespace Dizzy.Clothesline
 
             if (dot < -0.999999f)
             {
-                Vector3 axis = Vector3.Cross(Vector3.right, f);
-                if (axis.sqrMagnitude < 1e-8f)
+                // Any half turn about an axis square to f will do, but they are not alike.
+                // A level vector turned about a level axis lands level and upside down, which
+                // is a knot hung the wrong way up. Turn it about the vertical instead.
+                Vector3 axis;
+                if (Mathf.Abs(f.y) < 1e-3f)
+                {
+                    axis = Vector3.up;
+                }
+                else
+                {
                     axis = Vector3.Cross(Vector3.up, f);
+                    if (axis.sqrMagnitude < 1e-8f)
+                        axis = Vector3.right;
+                }
                 axis.Normalize();
                 return AxisAngle(axis, 180f);
             }

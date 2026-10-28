@@ -36,6 +36,7 @@ namespace Dizzy.Clothesline
         internal struct Motion
         {
             public bool Built;
+            public int Bad;
             public float RopeRadius;
             public float Wall;
             public Vector3 LeftPos;
@@ -159,6 +160,8 @@ namespace Dizzy.Clothesline
             ref Motion motion, Vector3 rope, Vector3 axis, float ropeRadius, float wall,
             Mesh body, Mesh left, Mesh right)
         {
+            if (!CordGuard.Usable(ref motion.Bad, rope, axis))
+                return;
             float cord = ropeRadius / 3f;
             if (Wants(motion, ropeRadius, wall))
             {

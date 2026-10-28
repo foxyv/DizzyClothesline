@@ -19,4 +19,9 @@
       <Private>true</Private>
     </Reference>
   </ItemGroup>
+  <ItemGroup>
+    <!-- NUnit loads every type in this assembly, and the drill's types use Unity. The package
+         reference is compile-only, so the game's copy is put beside the tests. -->
+    <None Include="D:\SteamLibrary\steamapps\common\Sailwind\Sailwind_Data\Managed\UnityEngine.CoreModule.dll" Link="UnityEngine.CoreModule.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

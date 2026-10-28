@@ -22,6 +22,7 @@ namespace Dizzy.Clothesline
         internal struct Motion
         {
             public bool Built;
+            public int Bad;
             public float LineRadius;
             public Vector3 ArcStart;
             public Vector3 ArcPos;
@@ -122,6 +123,8 @@ namespace Dizzy.Clothesline
 
         internal static void Step(ref Motion motion, Vector3 rope, Vector3 axis, float lineRadius, Mesh arcMesh, Mesh riseMesh)
         {
+            if (!CordGuard.Usable(ref motion.Bad, rope, axis))
+                return;
             if (Wants(motion, lineRadius))
             {
                 motion.ArcStart = BuildArc(arcMesh, lineRadius);

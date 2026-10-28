@@ -29,6 +29,7 @@ namespace Dizzy.Clothesline
         internal struct Motion
         {
             public bool Built;
+            public int Bad;
             public float RopeRadius;
             public float StringRadius;
             public float StalkRadius;
@@ -147,6 +148,9 @@ namespace Dizzy.Clothesline
             ref Motion motion, Vector3 rope, Vector3 axis, Vector3 top, Vector3 down,
             float stalkRadius, float ropeRadius, Mesh wrap, Mesh loop, Mesh span)
         {
+            if (!CordGuard.Usable(ref motion.Bad, rope, axis))
+                return;
+            stalkRadius = Mathf.Min(stalkRadius, CordGuard.MaxStalkRadius);
             float stringRadius = ropeRadius * 0.5f;
             Vector3 origin = top + down * stalkRadius;
             Vector3 towardRope = rope - origin;
@@ -208,7 +212,7 @@ namespace Dizzy.Clothesline
             if (down.sqrMagnitude < 1e-8f)
                 down = -axis;
             down.Normalize();
-            radius = cap.radius;
+            radius = Mathf.Min(cap.radius, CordGuard.MaxStalkRadius);
             return true;
         }
 

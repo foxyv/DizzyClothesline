@@ -52,7 +52,7 @@ namespace Dizzy.Clothesline.Tests
                 bool pass = r.Bounded && r.Recovers;
                 all &= pass;
                 text.Append(pass ? "PASS  " : "FAIL  ");
-                text.Append(r.Item.PadRight(14)).Append(r.Bad.PadRight(16));
+                text.Append(r.Item.PadRight(18)).Append(r.Bad.PadRight(16));
                 text.Append(r.Baseline.ToString("0.000").PadLeft(8));
                 text.Append(r.DuringBad.ToString("0.000").PadLeft(10));
                 text.Append(r.After.ToString("0.000").PadLeft(10));
@@ -84,6 +84,7 @@ namespace Dizzy.Clothesline.Tests
             public string Name;
             public Func<Frame> Start;
             public bool ReadsSize;
+            public bool FarRopeIsLegit;
         }
 
         private static IEnumerable<Item> Items()
@@ -92,6 +93,9 @@ namespace Dizzy.Clothesline.Tests
             yield return new Item { Name = "Soup pot", Start = Pot };
             yield return new Item { Name = "Date rack", Start = Rack };
             yield return new Item { Name = "Kettle handle", Start = Handle };
+            yield return new Item { Name = "Spyglass", Start = Spyglass };
+            yield return new Item { Name = "Bag/sausage knot", Start = Knot };
+            yield return new Item { Name = "Clothesline", Start = Line, FarRopeIsLegit = true };
         }
 
         private static Frame Banana()
@@ -133,6 +137,56 @@ namespace Dizzy.Clothesline.Tests
             {
                 LoopTie.StepHandle(ref motion, passage, rope, axis, RopeRadius, 0.012f * size, 0.006f * size, null);
                 return Reach(motion.Length, motion.Position);
+            };
+        }
+
+        private static Frame Spyglass()
+        {
+            SpyglassTie.GlassMotion motion = default(SpyglassTie.GlassMotion);
+            float cord = RopeRadius / 3f;
+            return (rope, axis, size) =>
+            {
+                SpyglassTie.Step(ref motion, rope, axis, RopeRadius, cord, 0.045f, -0.42f, 0f, null);
+                return Reach(motion.Rope, motion.Axis * 0f);
+            };
+        }
+
+        private static Frame Knot()
+        {
+            LineEye.Aim aim = default(LineEye.Aim);
+            return (rope, axis, size) =>
+            {
+                LineEye.Step(ref aim, axis, 0.02f, RopeRadius, null, Profile.Kind.Bag);
+                return Reach(new Vector3(aim.Rotation.x, aim.Rotation.y, aim.Rotation.z) * 0f,
+                    aim.Rotation.w * 0f);
+            };
+        }
+
+        // The rope's far hook is the sampled point. A hook moved far is a real longer rope,
+        // so only a hook that is not a number counts as a bad sample here.
+        private static Frame Line()
+        {
+            bool built = false;
+            Vector3 builtA = Vector3.zero;
+            Vector3 builtB = Vector3.zero;
+            var points = new Vector3[25];
+            var paths = new List<Vector3[]>();
+            Vector3 a = new Vector3(-1.2f, 0.5f, 0f);
+            Vector3 b = new Vector3(1.15f, 0.5f, 0.25f);
+            return (rope, axis, size) =>
+            {
+                ClotheslineLine.StepMesh(ref built, ref builtA, ref builtB, a, b + rope * 0.1f,
+                    0.02f, 0.04f, Vector3.up, Vector3.up, points, paths, null);
+                float reach = 0f;
+                foreach (Vector3 point in points)
+                {
+                    float r = Reach(point * 0f);
+                    if (float.IsInfinity(r))
+                        return r;
+                    reach = Mathf.Max(reach, r);
+                }
+
+                return reach;
             };
         }
 
@@ -215,23 +269,26 @@ namespace Dizzy.Clothesline.Tests
             var results = new List<Result>();
             foreach (Item item in Items())
             {
-                results.Add(Try(item, "rope 3 m away", frame => Normal(frame) + new Vector3(3f, 0f, 0f), 1f));
-                results.Add(Try(item, "rope NaN", frame => new Vector3(float.NaN, float.NaN, float.NaN), 1f));
+                Vector3 nan = new Vector3(float.NaN, float.NaN, float.NaN);
+                if (!item.FarRopeIsLegit)
+                    results.Add(Try(item, "rope 3 m away", frame => Normal(frame) + new Vector3(3f, 0f, 0f), Axis, 1f));
+                results.Add(Try(item, "rope NaN", frame => nan, Axis, 1f));
+                results.Add(Try(item, "axis NaN", Normal, frame => nan, 1f));
                 if (item.ReadsSize)
-                    results.Add(Try(item, "size read x20", frame => Normal(frame), 20f));
+                    results.Add(Try(item, "size read x20", Normal, Axis, 20f));
             }
 
             return results;
         }
 
-        private static Result Try(Item item, string bad, Func<int, Vector3> badRope, float badSize)
+        private static Result Try(Item item, string bad, Func<int, Vector3> badRope, Func<int, Vector3> badAxis, float badSize)
         {
             Frame frame = item.Start();
             float baseline = 0f;
             for (int i = 0; i < Warmup; i++)
                 baseline = Mathf.Max(baseline, frame(Normal(i), Axis(i), 1f));
 
-            float during = frame(badRope(Warmup), Axis(Warmup), badSize);
+            float during = frame(badRope(Warmup), badAxis(Warmup), badSize);
             float after = frame(Normal(Warmup + 1), Axis(Warmup + 1), 1f);
             float limit = baseline * 3f + 0.05f;
             return new Result

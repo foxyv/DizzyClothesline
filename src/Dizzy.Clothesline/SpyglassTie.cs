@@ -33,6 +33,7 @@ namespace Dizzy.Clothesline
         internal struct GlassMotion
         {
             public bool Built;
+            public int Bad;
             public Vector3 Rope;
             public Vector3 Axis;
             public float RopeRadius;
@@ -196,6 +197,9 @@ namespace Dizzy.Clothesline
             ref GlassMotion motion, Vector3 rope, Vector3 axis, float ropeRadius, float cordRadius,
             float cupRadius, float eyeZ, float lift, Mesh mesh)
         {
+            // The cord runs from the rope to the eyepiece, so the rope may be that far away.
+            if (!CordGuard.Usable(ref motion.Bad, rope, axis, CordGuard.MaxRopeDistance + Mathf.Abs(eyeZ)))
+                return;
             if (motion.Built
                 && (rope - motion.Rope).sqrMagnitude < 1e-8f
                 && (axis - motion.Axis).sqrMagnitude < 1e-8f

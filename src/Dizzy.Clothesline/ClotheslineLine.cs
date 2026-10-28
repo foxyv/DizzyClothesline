@@ -134,6 +134,9 @@ namespace Dizzy.Clothesline
             Vector3 hookUpA, Vector3 hookUpB,
             Vector3[] points, List<Vector3[]> paths, Mesh mesh)
         {
+            // A hook position that is not a number would turn the whole rope to NaN.
+            if (!CordGuard.Finite(a) || !CordGuard.Finite(b))
+                return;
             if (built
                 && (a - builtA).sqrMagnitude <= MoveTolerance * MoveTolerance
                 && (b - builtB).sqrMagnitude <= MoveTolerance * MoveTolerance)

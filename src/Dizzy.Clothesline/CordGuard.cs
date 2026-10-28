@@ -29,13 +29,20 @@ namespace Dizzy.Clothesline
         // in a row, and resets on a good one.
         internal static bool Usable(ref int bad, Vector3 rope, Vector3 axis)
         {
+            return Usable(ref bad, rope, axis, MaxRopeDistance);
+        }
+
+        // For an item whose own cord is longer than a quarter of a metre, such as a spyglass,
+        // the limit is how far the rope may read from its origin.
+        internal static bool Usable(ref int bad, Vector3 rope, Vector3 axis, float maxDistance)
+        {
             if (!Finite(rope) || !Finite(axis))
             {
                 bad++;
                 return false;
             }
 
-            if (rope.magnitude > MaxRopeDistance)
+            if (rope.magnitude > maxDistance)
             {
                 bad++;
                 return bad > Patience;

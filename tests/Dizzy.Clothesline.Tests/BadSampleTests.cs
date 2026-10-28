@@ -29,6 +29,18 @@ namespace Dizzy.Clothesline.Tests
         }
 
         [Test]
+        public void ARopeThatStaysFarIsFollowedAfterTheGuardsPatience()
+        {
+            Assert.That(BadSampleDrill.FramesBeforeAFarRopeIsFollowed(), Is.EqualTo(CordGuard.Patience + 1));
+        }
+
+        [Test]
+        public void ARopeThatIsNotANumberIsNeverFollowed()
+        {
+            Assert.That(BadSampleDrill.NaNRopeFollowedWithin(100), Is.False);
+        }
+
+        [Test]
         public void EachHangingItemStaysNearItsSizeThroughABadFrame()
         {
             List<BadSampleDrill.Result> results = BadSampleDrill.Run();
@@ -170,6 +182,32 @@ namespace Dizzy.Clothesline.Tests
             public float After;
             public bool Bounded;
             public bool Recovers;
+        }
+
+        // Frames a rope that stays 3 m away is refused before the cord follows it.
+        internal static int FramesBeforeAFarRopeIsFollowed()
+        {
+            int bad = 0;
+            for (int frame = 1; frame <= 100; frame++)
+            {
+                if (CordGuard.Usable(ref bad, new Vector3(3f, 0f, 0f), Vector3.right))
+                    return frame;
+            }
+
+            return -1;
+        }
+
+        internal static bool NaNRopeFollowedWithin(int frames)
+        {
+            int bad = 0;
+            Vector3 nan = new Vector3(float.NaN, 0f, 0f);
+            for (int frame = 0; frame < frames; frame++)
+            {
+                if (CordGuard.Usable(ref bad, nan, Vector3.right))
+                    return true;
+            }
+
+            return false;
         }
 
         internal static List<Result> Run()

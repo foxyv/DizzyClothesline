@@ -436,7 +436,7 @@ namespace Dizzy.Clothesline
             // Extra gap so an eyepiece, a hammer head, or a handle is not buried in
             // the rope. The pose itself puts that point on the pin.
             float drop = SpyglassTie.Drop(anchor.Ship) + HammerTie.Drop(anchor.Ship) + PotTie.Drop(anchor.Ship)
-                + LanternHang.Drop(anchor.Ship) + WindChimeHang.Drop(anchor.Ship)
+                + PlantPots.Drop(anchor.Ship) + LanternHang.Drop(anchor.Ship) + WindChimeHang.Drop(anchor.Ship)
                 + MugHang.Drop(anchor.Ship);
             anchor.transform.localPosition = Point(s) + across * Lines.HookOffset
                 - Vector3.up * (ClotheslineConfig.HangDrop.Value + drop);
@@ -614,6 +614,7 @@ namespace Dizzy.Clothesline
                 LoopTie.Clear(anchor);
                 HammerTie.Clear(anchor);
                 PotTie.Clear(anchor);
+                PlantTie.Clear(anchor);
                 SausageKnot.Clear(anchor);
                 BagKnot.Clear(anchor);
                 return;
@@ -625,6 +626,7 @@ namespace Dizzy.Clothesline
             LoopTie.Sync(anchor);
             HammerTie.Sync(anchor);
             PotTie.Sync(anchor);
+            PlantTie.Sync(anchor);
             SausageKnot.Sync(anchor);
             BagKnot.Sync(anchor);
         }

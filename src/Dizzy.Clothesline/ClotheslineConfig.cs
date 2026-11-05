@@ -13,6 +13,8 @@ namespace Dizzy.Clothesline
         internal static ConfigEntry<float> ItemSpacing;
         internal static ConfigEntry<float> HangDrop;
         internal static ConfigEntry<bool> Hangers;
+        internal static ConfigEntry<bool> Plants;
+        internal static ConfigEntry<float> PlantDrop;
         internal static ConfigEntry<bool> Metrics;
 
         internal static void Bind(ConfigFile config)
@@ -41,13 +43,31 @@ namespace Dizzy.Clothesline
             Hangers = config.Bind("Hanging", "Hangers", true,
                 "Draw the small cords, rings, and knots that join a hung item to the rope. Turn this off and the items still hang, with nothing extra between them and the line.");
 
+            Plants = config.Bind("Hanging", "Plants", true,
+                "Let the seven flower pots hang from a line or a lamp hook. A pot loaded before this is changed keeps its old setting until the game restarts.");
+
+            PlantDrop = config.Bind("Hanging", "Plant Drop", 0f, new ConfigDescription(
+                "How much farther a hung flower pot hangs below the rope or hook, in metres. Zero keeps the default cord length for the pot; a negative number lifts it closer.",
+                new AcceptableValueRange<float>(-0.25f, 1f)));
+
             Metrics = config.Bind("Metrics", "Enabled", false,
                 "Record hanger and frame timings. Once a minute, write the mean, median, p90, and p99 to the log and the screen. Leave this off to skip recording and hide that readout.");
 
             Sag.SettingChanged += (s, e) => Lines.RebuildAll();
             Thickness.SettingChanged += (s, e) => Lines.RebuildAll();
             HangDrop.SettingChanged += (s, e) => Lines.RebuildAll();
+            PlantDrop.SettingChanged += (s, e) => Lines.RebuildAll();
             RopeColor.SettingChanged += (s, e) => RopeMesh.ApplyColor();
+        }
+
+        internal static float PlantDropValue
+        {
+            get { return PlantDrop == null ? 0f : PlantDrop.Value; }
+        }
+
+        internal static bool PlantsHang
+        {
+            get { return Plants == null || Plants.Value; }
         }
 
         internal static bool DrawHangers

@@ -29,6 +29,23 @@ namespace Dizzy.Clothesline.Tests
         }
 
         [Test]
+        public void OnlyTheSevenFlowerPotsAreSizedAsPlants()
+        {
+            string specs = BadSampleDrill.PlantSpecs();
+            Assert.That(specs, Does.StartWith("189 not a plant;190 plant"));
+            Assert.That(specs, Does.Contain("196 plant"));
+            Assert.That(specs, Does.EndWith("197 not a plant;"));
+        }
+
+        [TestCase(190)]
+        [TestCase(194)]
+        [TestCase(196)]
+        public void EachStrandEndsAgainstTheRopeAboveThePot(int prefabIndex)
+        {
+            Assert.That(BadSampleDrill.PlantStrandMiss(prefabIndex), Is.LessThan(0.005f));
+        }
+
+        [Test]
         public void ARopeThatStaysFarIsFollowedAfterTheGuardsPatience()
         {
             Assert.That(BadSampleDrill.FramesBeforeAFarRopeIsFollowed(), Is.EqualTo(CordGuard.Patience + 1));
@@ -91,6 +108,7 @@ namespace Dizzy.Clothesline.Tests
         {
             yield return new Item { Name = "Banana bunch", ReadsSize = true, Start = Banana };
             yield return new Item { Name = "Soup pot", Start = Pot };
+            yield return new Item { Name = "Potted plant", Start = Plant };
             yield return new Item { Name = "Date rack", Start = Rack };
             yield return new Item { Name = "Kettle handle", Start = Handle };
             yield return new Item { Name = "Spyglass", Start = Spyglass };
@@ -116,6 +134,19 @@ namespace Dizzy.Clothesline.Tests
             {
                 PotTie.Step(ref motion, rope, axis, RopeRadius, 0.1613f, null, null, null);
                 return Reach(motion.LeftScale.z, motion.RightScale.z, motion.LeftPos, motion.RightPos);
+            };
+        }
+
+        private static Frame Plant()
+        {
+            PlantTie.Motion motion = default(PlantTie.Motion);
+            PlantPots.Spec spec;
+            PlantPots.TryGet(190, out spec);
+            return (rope, axis, size) =>
+            {
+                PlantTie.Step(ref motion, rope, axis, RopeRadius, spec, null, null, null);
+                return Reach(motion.A.Scale.z, motion.B.Scale.z, motion.C.Scale.z, motion.D.Scale.z,
+                    motion.A.Pos, motion.B.Pos, motion.C.Pos, motion.D.Pos);
             };
         }
 
@@ -262,6 +293,41 @@ namespace Dizzy.Clothesline.Tests
             }
 
             return false;
+        }
+
+        // The plants hang the rope a good way above the pot, so a normal frame puts it there.
+        // Returns how far each strand's far end is from where the rope's underside sits, in
+        // metres, for each of the seven pots.
+        internal static string PlantSpecs()
+        {
+            var text = new StringBuilder();
+            for (int index = 189; index <= 197; index++)
+            {
+                PlantPots.Spec spec;
+                bool is_ = PlantPots.TryGet(index, out spec);
+                text.Append(index).Append(is_ ? " plant rim " + spec.Rim.ToString("0.000") + " radius " + spec.Radius.ToString("0.000") + " rise " + spec.Rise.ToString("0.000") : " not a plant").Append(';');
+            }
+
+            return text.ToString();
+        }
+
+        // Where each strand ends against the rope for a pot with the rope straight above it.
+        internal static float PlantStrandMiss(int prefabIndex)
+        {
+            PlantPots.Spec spec;
+            PlantPots.TryGet(prefabIndex, out spec);
+            PlantTie.Motion motion = default(PlantTie.Motion);
+            Vector3 rope = new Vector3(0f, spec.Rim + spec.Rise, 0f);
+            PlantTie.Step(ref motion, rope, Vector3.right, RopeRadius, spec, null, null, null);
+            Vector3 expected = rope - Vector3.up * (RopeRadius + RopeRadius / 3f * 1.2f);
+            float miss = 0f;
+            foreach (PlantTie.Strand strand in new[] { motion.A, motion.B, motion.C, motion.D })
+            {
+                Vector3 end = strand.Pos + strand.Rot * Vector3.forward * strand.Scale.z;
+                miss = Mathf.Max(miss, Vector3.Distance(end, expected));
+            }
+
+            return miss;
         }
 
         internal static List<Result> Run()

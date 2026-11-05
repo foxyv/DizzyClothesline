@@ -21,6 +21,7 @@ namespace Dizzy.Clothesline
         internal LoopTie Loop;
         internal HammerTie Hammer;
         internal PotTie Pot;
+        internal PlantTie Plant;
         internal SausageKnot Sausage;
         internal BagKnot Bag;
     }

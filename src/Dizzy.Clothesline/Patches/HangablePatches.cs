@@ -37,6 +37,7 @@ namespace Dizzy.Clothesline.Patches
     // A Medi lantern is turned a quarter turn so its bail opens along the rope.
     // A wind chime keeps its hang pitch and is turned so its loop opens along the rope.
     // A wood mug is turned a quarter turn about its handle. Both metal mugs are only raised.
+    // A flower pot on a lamp hook is dropped so its rim hangs under the hook.
     // Everything else is left alone.
     [HarmonyPatch(typeof(HangableItem), "LateUpdate")]
     internal static class SpyglassPosePatch
@@ -51,6 +52,7 @@ namespace Dizzy.Clothesline.Patches
             Lines.PoseLantern(__instance);
             Lines.PoseWindChime(__instance);
             Lines.PoseMug(__instance);
+            PlantPots.PoseOnHook(__instance);
         }
     }
 

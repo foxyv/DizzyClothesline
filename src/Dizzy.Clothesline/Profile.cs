@@ -19,6 +19,7 @@ namespace Dizzy.Clothesline
             Sausage,
             Bag,
             Pot,
+            Plant,
             Rack,
             Loop,
             Hammer,
@@ -29,7 +30,7 @@ namespace Dizzy.Clothesline
 
         private static readonly string[] Names =
         {
-            "stem", "sausage", "bag", "pot", "rack", "loop", "hammer", "glass", "line", "late",
+            "stem", "sausage", "bag", "pot", "plant", "rack", "loop", "hammer", "glass", "line", "late",
         };
 
         private static readonly List<long>[] _samples = new List<long>[Names.Length];

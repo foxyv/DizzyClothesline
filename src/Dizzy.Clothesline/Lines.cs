@@ -801,6 +801,7 @@ namespace Dizzy.Clothesline
             LoopTie.Sync(anchor);
             HammerTie.Sync(anchor);
             PotTie.Sync(anchor);
+            PlantTie.Sync(anchor);
             SausageKnot.Sync(anchor);
             BagKnot.Sync(anchor);
         }
@@ -830,6 +831,7 @@ namespace Dizzy.Clothesline
             LoopTie.Clear(anchor);
             HammerTie.Clear(anchor);
             PotTie.Clear(anchor);
+            PlantTie.Clear(anchor);
             SausageKnot.Clear(anchor);
             BagKnot.Clear(anchor);
             Hung.Remove(anchor.HangId);
@@ -1347,6 +1349,17 @@ namespace Dizzy.Clothesline
         internal static void EndLineFill()
         {
             _fillLinePot = 0;
+        }
+
+        internal static bool OnLine(HangableItem hang)
+        {
+            return hang != null && Hung.ContainsKey(hang.GetInstanceID());
+        }
+
+        // The collider a HangableItem is hung from, a lamp hook's or a line's.
+        internal static Collider HookOf(HangableItem hang)
+        {
+            return hang != null && CurrentHook != null ? CurrentHook(hang) : null;
         }
 
         internal static bool IsOnLine(ShipItem ship)
